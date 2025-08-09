@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 from plotly.colors import sample_colorscale
 
 # Matplotlib & friends
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib import font_manager as fm
@@ -35,20 +36,52 @@ import requests
 
 # =========================
 # ====== CONFIG & DATA ====
-# Fonts (local if available; safe fallback on cloud)
-GABARITO_FONT_PATH = os.path.expanduser("~/fonts/Gabarito-Regular.ttf")
-BOLD_FONT = os.path.expanduser("~/fonts/Gabarito-Bold.ttf")
-try:
-    font_normal = fm.FontProperties(fname=GABARITO_FONT_PATH)
-    font_bold = fm.FontProperties(fname=BOLD_FONT)
-except Exception:
-    font_normal = None
-    font_bold = None
+
+# ===== Fonts (repo-first, crash-safe fallbacks) =====
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+GABARITO_REG_PATH = os.path.join(APP_DIR, "fonts", "Gabarito-Regular.ttf")
+GABARITO_BOLD_PATH = os.path.join(APP_DIR, "fonts", "Gabarito-Bold.ttf")
+
+def _fontprops_or_fallback(ttf_path: str, fallback_family: str = "DejaVu Sans"):
+    try:
+        if os.path.isfile(ttf_path):
+            # Optional: register with Matplotlib so the name resolves in some contexts
+            try:
+                fm.fontManager.addfont(ttf_path)
+            except Exception:
+                pass
+            return fm.FontProperties(fname=ttf_path)
+    except Exception:
+        pass
+    return fm.FontProperties(family=fallback_family)
+
+# Used by matplotlib/mplsoccer text & PyPizza params/values
+font_normal = _fontprops_or_fallback(GABARITO_REG_PATH)
+font_bold   = _fontprops_or_fallback(GABARITO_BOLD_PATH)
+
+# Global font stack for Plotly & UI
+FONT_FAMILY = "Gabarito, DejaVu Sans, Arial, sans-serif"
+
+# Matplotlib default fallback chain (helps everywhere)
+mpl.rcParams["font.family"] = ["Gabarito", "DejaVu Sans", "Arial", "sans-serif"]
+
+# Inject webfont so browsers actually render Gabarito for Plotly/UI
+st.markdown(
+    """
+    <link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+      :root, body, div, span, p, h1, h2, h3, h4, h5, h6, button, input, select, textarea {
+        font-family: 'Gabarito', 'DejaVu Sans', Arial, sans-serif !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Colors / theme
 POSTER_BG = "#f1ffcd"  # pastel green vibe for plots background
 HOVER_BG = "#f5f5dc"   # beige hover background
-FONT_FAMILY = "Gabarito, Montserrat, Arial, sans-serif"
 
 # Position groups
 position_groups = {
@@ -288,6 +321,15 @@ def load_csvs(base_folder: str, which: str):
 # ============
 # UTILITIES
 # ============
+def apply_hover_style(fig):
+    fig.update_layout(
+        hoverlabel=dict(
+            bgcolor=HOVER_BG,
+            font=dict(family=FONT_FAMILY, size=13, color="#000")
+        )
+    )
+    # enforce global font on every figure
+    fig.update_layout(font=dict(family=FONT_FAMILY))
 
 def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_name: str | None):
     # Build label set: top & bottom 3 for X and Y
@@ -326,14 +368,6 @@ def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_
     text_labels = dfx['Player'].where(dfx['Player'].isin(label_set), "")
 
     return text_labels, marker_colors, marker_sizes, marker_lines, highlight
-
-def apply_hover_style(fig):
-    fig.update_layout(
-        hoverlabel=dict(
-            bgcolor=HOVER_BG,  # beige
-            font=dict(family=FONT_FAMILY, size=13, color="#000")
-        )
-    )
 
 def filter_by_minutes(df, min_minutes):
     df = df.copy()
@@ -494,7 +528,7 @@ def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
         xaxis=dict(title="Percentile", range=[0, 100], gridcolor="#eee", color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(automargin=True, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         template="simple_white", height=60 + 32*len(labels),
-        margin=dict(l=200, r=40, t=80, b=40), font=dict(family=FONT_FAMILY, color="#000")
+        margin=dict(l=200, r=40, t=80, b=40),
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -557,7 +591,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  ha='center', va='bottom', fontsize=9, color=("#666" if lightmode else "#CCC"),
                  fontproperties=font_normal, alpha=0.85)
 
-        # Optional role score overlay (requested: show on pizzas with toppings)
+        # Role Score badge appears ONLY when toppings=True and explicitly enabled
         if show_role_score:
             role_stats = archetype_params_full.get(role_name, [])
             score = calculate_role_score(player_row, role_stats, df_filtered, role_name)
@@ -581,7 +615,7 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
 
     # light-blue gradient (no black bars)
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
-                    "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFC","#74B4FC"][::-1]
+                    "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
     bar_colors = pastel_blues[-len(top):][::-1]
 
     def lum(c):
@@ -611,7 +645,7 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
         xaxis=dict(title='Role Suitability Score (0–100)', range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         margin=dict(l=120, r=40, t=60, b=40),
-        height=600, width=None, font=dict(family=FONT_FAMILY, color="#000")
+        height=600, width=None,
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -622,7 +656,7 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
 
     # pastel light-blue palette
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
-                    "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFC","#74B4FC"][::-1]
+                    "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
     bar_colors = pastel_blues[-len(top):][::-1]
 
     def lum(c):
@@ -647,7 +681,6 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
         xaxis=dict(title=tidy_label, gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         margin=dict(l=120, r=40, t=60, b=40), height=600, width=None,
-        font=dict(family=FONT_FAMILY, color="#000")
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -684,7 +717,7 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         xaxis=dict(title="Similarity (%)", range=[0,100], gridcolor="#222222", color="#222222", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', color="#000", tickfont=dict(color="#000"), linecolor="#000"),
-        template="simple_white", height=500, font=dict(family=FONT_FAMILY, color="#000")
+        template="simple_white", height=500,
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -707,7 +740,7 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
         ),
         showlegend=True,
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
-        height=650, font=dict(family=FONT_FAMILY, color="#000")
+        height=650,
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -774,6 +807,7 @@ def build_pizza_figure(
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.18", lw=1)
         )
     )
+    # Only when toppings=True and enabled
     if show_role_score and toppings:
         role_stats = archetype_params_full.get(role_name, [])
         score = calculate_role_score(player_row, role_stats, df, role_name)
@@ -842,7 +876,7 @@ def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_ur
         ax_m.set_title(f"{title}:", fontsize=13, pad=6, fontproperties=font_normal, loc="left")
     ax_mat = fig.add_subplot(gs[9:14, 0:12])
     build_role_matrix_axes(ax_mat, df, player_row, role_x, role_y)
-    fig.text(0.01, 0.01, "@nstntly", fontsize=10, color="#777", fontproperties=font_normal)
+    fig.text(0.01, 0.01, "willumanalytics", fontsize=10, color="#777", fontproperties=font_normal)
     return fig
 
 # ====================
@@ -1071,7 +1105,6 @@ elif mode == "5":
             yaxis=dict(autorange='reversed', color="#000", tickfont=dict(color="#000"), linecolor="#000"),
             height=min(80 + 28*len(role_scores), 1200),
             template="simple_white",
-            font=dict(family=FONT_FAMILY, color="#000")
         )
         apply_hover_style(fig)
         st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -1150,7 +1183,6 @@ elif mode == "12":
         except Exception:
             pass
 
-        # Hover text (simple -> layout will style the box)
         hover = [
             f"<b>{r['Player']}</b><br>"
             f"Team: {r.get('Squad','?')}<br>"
@@ -1181,20 +1213,18 @@ elif mode == "12":
         ])
 
         fig.update_layout(
-            title=dict(text=f"{x_pick} vs {y_pick} — scatter", font=dict(color="#000")),
+            title=dict(text=f"{x_pick} vs {y_pick} — scatter", font=dict(color="#000", family=FONT_FAMILY)),
             xaxis=dict(title=x_pick, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
             yaxis=dict(title=y_pick, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
             plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG, height=800,
-            font=dict(family=FONT_FAMILY, color="#000"),
-            hoverlabel=dict(bgcolor=POSTER_BG, font=dict(family=FONT_FAMILY, color="#000"))
         )
+        apply_hover_style(fig)
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
         if search_name and not highlight:
             st.caption("No close match found for that player.")
     else:
         st.warning("Need at least two numeric stat columns.")
-
 
 elif mode == "13":
     role_x = st.selectbox("X-axis role", arch_keys, index=0, key="role_x")
@@ -1242,15 +1272,13 @@ elif mode == "13":
     ])
 
     fig.update_layout(
-        title=dict(text=f"{role_x} vs {role_y} — role suitability", font=dict(color="#000")),
+        title=dict(text=f"{role_x} vs {role_y} — role suitability", font=dict(color="#000", family=FONT_FAMILY)),
         xaxis=dict(title=role_x, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
         yaxis=dict(title=role_y, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG, height=800,
-        font=dict(family=FONT_FAMILY, color="#000"),
-        hoverlabel=dict(bgcolor=POSTER_BG, font=dict(family=FONT_FAMILY, color="#000"))
     )
+    apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
 
     if search_name and not highlight:
         st.caption("No close match found for that player.")
-
