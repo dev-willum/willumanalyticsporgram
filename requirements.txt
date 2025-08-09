@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+scipy
+plotly
+matplotlib
+mplsoccer
+scikit-learn
+Pillow
+requests
+kaleido
