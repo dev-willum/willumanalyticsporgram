@@ -1,0 +1,9 @@
+# Ignore image exports
+analysis program images/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore environment files
+.env
