@@ -296,7 +296,7 @@ archetype_params_full = {**archetype_params, **category_archetypes}
 # ----------------------
 # App config/theme
 # ----------------------
-st.set_page_config(page_title="Football Analytics Toolkit", layout="wide")
+st.set_page_config(page_title="willumanalytics", layout="wide")
 
 # ==============
 # IO + CACHING
@@ -522,6 +522,14 @@ def find_player_row(df, name_query):
 # =================
 # PLOT FUNCTIONS
 # =================
+
+# --- Dynamic contrast helper for text vs background (hex) ---
+def get_contrast_text_color(hex_color: str) -> str:
+    r, g, b = mcolors.hex2color(hex_color)
+    brightness = (r * 299 + g * 587 + b * 114) * 255 / 1000
+    return "#000000" if brightness > 140 else "#F2F2F2"
+
+
 def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
     vals = [player_row.get(s, np.nan) for s in stat_cols]
     percentiles = [
@@ -549,12 +557,15 @@ def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
     df_out = pd.DataFrame({"Stat": labels, "Percentile": percentiles, "Value": vals})
     return fig, df_out
 
+
 def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, toppings=True, show_role_score=False):
     raw_vals = [player_row.get(s, float('nan')) for s in stat_cols]
     pcts = [position_relative_percentile(df_filtered, player_row, s) if np.isfinite(player_row.get(s, np.nan)) else 0 for s in stat_cols]
+
+    # Dynamic per-slice text colours based on slice fill
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
-    value_color = "#222222" if lightmode else "#fffff0"
-    text_colors = [value_color for _ in slice_colors]
+    text_colors = [get_contrast_text_color(c) for c in slice_colors]
+
     display_params = [break_label(stat_display_names.get(p, p), 15) for p in stat_cols]
 
     bg = "#f1ffcd" if lightmode else "#222222"
@@ -576,13 +587,15 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
         figsize=(10, 11),
         color_blank_space="same",
         slice_colors=slice_colors,
-        value_colors=text_colors,
-        value_bck_colors=["cornflowerblue"]*len(slice_colors),
+        value_colors=text_colors,            # << dynamic contrast applied here
+        value_bck_colors=slice_colors,       # keep chips matching the slice colour
         blank_alpha=0.4,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
         kwargs_params=dict(color=param_color, fontsize=18, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
-            color=value_color, fontsize=15, fontproperties=font_normal, zorder=3,
+            # per-slice colour comes from value_colors; this is a fallback only
+            color="#222222" if lightmode else "#fffff0",
+            fontsize=15, fontproperties=font_normal, zorder=3,
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.2", lw=1)
         )
     )
@@ -619,9 +632,10 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                 zorder=5
             )
 
-    # >>> FIX 1/2: do NOT clear the figure you want to save later
+    # >>> keep fig alive for download
     st.pyplot(fig, clear_figure=False)
     return fig
+
 
 def plot_role_leaderboard(df_filtered, role_name, role_stats):
     dfc = df_filtered.copy()
@@ -666,6 +680,7 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
 
+
 def show_top_players_by_stat(df, tidy_label, stat_col):
     top = df.nlargest(10, stat_col).reset_index(drop=True)
 
@@ -701,6 +716,7 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
 
+
 def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     X = df_filtered[stat_cols].fillna(0)
     scaler = StandardScaler()
@@ -717,6 +733,13 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     top_idx = order[:10]
     top_players = df_filtered.iloc[top_idx].copy()
     top_players['Similarity'] = sim[top_idx] * 100.0
+
+    # Contrast text on the uniform green bars
+    bar_fill = "#1fa44b"
+    r, g, b = [x*255 for x in mcolors.hex2color(bar_fill)]
+    luminance = 0.299*r + 0.587*g + 0.114*b
+    inside_text_color = "white" if luminance < 150 else "#222"
+
     fig = go.Figure([
         go.Bar(
             y=top_players['Player'][::-1],
@@ -724,7 +747,8 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
             orientation='h',
             text=[f"{s:.2f}%" for s in top_players['Similarity'][::-1]],
             textposition='inside',
-            marker=dict(color=["#1fa44b"]*len(top_players), line=dict(width=1, color='#333')),
+            marker=dict(color=bar_fill, line=dict(width=1, color='#333')),
+            textfont=dict(color=inside_text_color, family=FONT_FAMILY)  # << dynamic contrast
         )
     ])
     fig.update_layout(
@@ -738,6 +762,7 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     st.plotly_chart(fig, use_container_width=True, theme=None)
     pick = st.selectbox("Pick a player to compare on radar", top_players['Player'].tolist())
     return top_players[top_players['Player'] == pick].iloc[0] if pick else None
+
 
 def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_name):
     base_vals = [position_relative_percentile(df_filtered, base_row, s) for s in stat_cols]
@@ -755,7 +780,7 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
         ),
         showlegend=True,
         legend=dict(
-            font=dict(family=FONT_FAMILY, size=12, color="#000"),
+            font=dict(family=FONT_FAMILY, size=12, color="#000"),  # legend text black
         ),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         height=650,
@@ -763,6 +788,7 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return fig
+
 
 # ======== SCATTER STYLE HELPER (Matplotlib) ========
 def style_scatter_axes(ax, title_text):
@@ -774,6 +800,7 @@ def style_scatter_axes(ax, title_text):
         spine.set_color("#000")
         spine.set_linewidth(1)
 
+
 # ======== POSTER HELPERS (kept, not exposed in UI) ========
 def pizza_fig_to_array(fig, dpi=220):
     buf = BytesIO()
@@ -782,6 +809,7 @@ def pizza_fig_to_array(fig, dpi=220):
     buf.seek(0)
     img = Image.open(buf).convert("RGBA")
     return np.array(img)
+
 
 def build_pizza_figure(
     player_row, stat_cols, df, role_name,
@@ -793,12 +821,15 @@ def build_pizza_figure(
         if np.isfinite(player_row.get(s, np.nan)) else 0
         for s in stat_cols
     ]
+
+    # Dynamic per-slice text colours based on slice fill
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
-    value_color = "#222222" if lightmode else "#fffff0"
-    text_colors  = [value_color for _ in slice_colors]
+    text_colors  = [get_contrast_text_color(c) for c in slice_colors]
+
     display_params = [break_label(stat_display_names.get(p, p), 15) for p in stat_cols]
     bg = POSTER_BG if lightmode else "#222222"
-    param_color = value_color
+    param_color = "#222222" if lightmode else "#fffff0"
+
     baker = PyPizza(
         params=display_params,
         background_color=bg,
@@ -815,13 +846,14 @@ def build_pizza_figure(
         figsize=(8.5, 8.8),
         color_blank_space="same",
         slice_colors=slice_colors,
-        value_colors=text_colors,
-        value_bck_colors=["cornflowerblue"]*len(slice_colors),
+        value_colors=text_colors,            # << dynamic contrast applied here
+        value_bck_colors=slice_colors,
         blank_alpha=0.40,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
         kwargs_params=dict(color=param_color, fontsize=15, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
-            color=value_color, fontsize=12, fontproperties=font_normal, zorder=3,
+            color="#222222" if lightmode else "#fffff0",
+            fontsize=12, fontproperties=font_normal, zorder=3,
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.18", lw=1)
         )
     )
@@ -840,6 +872,7 @@ def build_pizza_figure(
         )
     return fig
 
+
 def build_role_matrix_axes(ax, df, player_row, role_x, role_y):
     ax.set_facecolor(POSTER_BG)
     dfx = df.copy()
@@ -855,6 +888,7 @@ def build_role_matrix_axes(ax, df, player_row, role_x, role_y):
     ax.set_xlabel(role_x); ax.set_ylabel(role_y)
     ax.grid(color="#d9e6a6", linewidth=1, alpha=1.0)
     style_scatter_axes(ax, f"Role Matrix: {role_x} vs {role_y}")
+
 
 def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_url=None):
     central_fig   = build_pizza_figure(player_row, archetype_params_full[main_role], df, main_role, lightmode=True, toppings=True, show_role_score=True)
@@ -896,6 +930,7 @@ def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_ur
     build_role_matrix_axes(ax_mat, df, player_row, role_x, role_y)
     fig.text(0.01, 0.01, "willumanalytics", fontsize=10, color="#777", fontproperties=font_normal)
     return fig
+
 
 # ====================
 # STREAMLIT RENDERER (kept but hidden from UI)
@@ -993,7 +1028,7 @@ MODE_ITEMS = [
 dot_nav(MODE_ITEMS, default_key="1")
 mode = st.session_state["mode"]
 
-st.title("Football Analytics Toolkit — Streamlit")
+st.title("willum's analytics")
 
 # ===============
 # MODE HANDLERS
