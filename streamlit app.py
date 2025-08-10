@@ -193,10 +193,12 @@ position_weights = {
         "progCarries/90": 1.2, "thirdCarries/90": 1.1, "passesBlocked/90": 1.0,
         "pAdjtackles/90": 0.9, "pAdjinterceptions/90": 0.8, "pAdjclearances/90": 0.7, "pass%": 1.1
     },
-    "Utility": {
-        "progCarries/90": 1.2, "thirdCarries/90": 1.1, "passesBlocked/90": 1.0,
-        "pAdjtackles/90": 0.9, "pAdjinterceptions/90": 0.8, "pAdjclearances/90": 0.7
+
+    "Progresser": {
+        "pAdjprogCarries/90": 1,
+        "pAdjprogPasses/90": 1.8, "lPass%": 1.2, "Succ/90": 1.1, "PPA/90": 1.3,
     },
+
     "CB - Ball-Playing": {
         "progPasses/90": 1.7, "pass%": 1.9,
         "headersWon%": 1.4, "headersWon/90": 1.3,
@@ -455,7 +457,7 @@ def get_contrast_text_color(hex_color):
     brightness = (r*299 + g*587 + b*114) * 255 / 1000
     return "#000000" if brightness > 140 else "#F2F2F2"
 
-def break_label(label, max_len=15):
+def break_label(label, max_len=24):
     if label.endswith("/90"):
         before = label[:-3].rstrip()
         if len(label) <= max_len:
@@ -590,7 +592,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
 
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
     text_colors = [get_contrast_text_color(c) for c in slice_colors]
-    display_params = [break_label(stat_display_names.get(p, p), 15) for p in stat_cols]
+    display_params = [break_label(stat_display_names.get(p, p), 20) for p in stat_cols]
 
     bg = "#f1ffcd" if lightmode else "#222222"
     param_color = "#222222" if lightmode else "#fffff0"
@@ -615,7 +617,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
         value_bck_colors=slice_colors,
         blank_alpha=0.4,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
-        kwargs_params=dict(color=param_color, fontsize=15, fontproperties=font_normal, va="center"),
+        kwargs_params=dict(color=param_color, fontsize=13, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
             color="#222222" if lightmode else "#fffff0",
             fontsize=12, fontproperties=font_normal, zorder=3,
@@ -637,7 +639,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  color=header_color, fontproperties=font_normal)
         suffix = _positions_suffix()
         fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}{suffix}",
-                 ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
+                ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.01, "willumanalytics",
                  ha='center', va='bottom', fontsize=9, color=("#666" if lightmode else "#CCC"),
                  fontproperties=font_normal, alpha=0.85)
@@ -818,6 +820,45 @@ def style_scatter_axes(ax, title_text):
         spine.set_color("#000")
         spine.set_linewidth(1)
 
+# ===== Modified: support positional vs global percentiles (Mode 14 will use global by default) =====
+def _compute_percentiles_table(dfin: pd.DataFrame, selected_stats: list[str], baseline: str = "positional") -> pd.DataFrame:
+    """
+    For each player in dfin, compute percentiles for selected_stats.
+    baseline: "positional" (vs same-position players) or "global" (vs all players in dfin)
+    Returns a DataFrame with columns pct_<stat>.
+    """
+    if not selected_stats or dfin.empty:
+        return pd.DataFrame(index=dfin.index)
+
+    pct_records = []
+    # Precompute global distributions once per stat (for speed)
+    global_distributions = {}
+    if baseline == "global":
+        for s in selected_stats:
+            if s in dfin.columns:
+                global_distributions[s] = dfin[s].replace([np.inf, -np.inf], np.nan).dropna()
+
+    for idx, row in dfin.iterrows():
+        rec = {}
+        for s in selected_stats:
+            if s not in dfin.columns:
+                rec[f"pct_{s}"] = np.nan
+                continue
+
+            if baseline == "global":
+                stat_vals = global_distributions.get(s, pd.Series(dtype=float))
+                val = row.get(s, np.nan)
+                if pd.isna(val) or stat_vals.empty:
+                    rec[f"pct_{s}"] = np.nan
+                else:
+                    rec[f"pct_{s}"] = round(stats.percentileofscore(stat_vals, val, kind='mean'), 2)
+            else:
+                rec[f"pct_{s}"] = position_relative_percentile(dfin, row, s)
+        pct_records.append(rec)
+
+    pct_df = pd.DataFrame(pct_records, index=dfin.index)
+    return pct_df
+
 
 def pizza_fig_to_array(fig, dpi=220):
     buf = BytesIO()
@@ -840,7 +881,7 @@ def build_pizza_figure(
     ]
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
     text_colors  = [get_contrast_text_color(c) for c in slice_colors]
-    display_params = [break_label(stat_display_names.get(p, p), 15) for p in stat_cols]
+    display_params = [break_label(stat_display_names.get(p, p), 20) for p in stat_cols]
     bg = POSTER_BG if lightmode else "#222222"
     param_color = "#222222" if lightmode else "#fffff0"
 
@@ -1029,6 +1070,8 @@ MODE_ITEMS = [
     ("Custom Archetype", "7"),
     ("Stat Scatter", "12"),
     ("Role Matrix", "13"),
+    ("Player Finder", "14"),
+
 ]
 dot_nav(MODE_ITEMS, default_key="1")
 mode = st.session_state["mode"]
@@ -1433,3 +1476,145 @@ elif mode == "13":
 
     if search_name and not highlight:
         st.caption("No close match found for that player.")
+
+elif mode == "14":
+    st.subheader("Player Finder")
+
+    # Optional league filter (uses your existing helper)
+    df_league = league_filter_ui(df)
+
+    # Choose percentile baseline for this mode (default to global)
+    baseline_option = st.radio(
+        "Percentile baseline",
+        ["Global (all players)", "Positional (same-position only)"],
+        index=0, horizontal=True
+    )
+    baseline_key = "global" if baseline_option.startswith("Global") else "positional"
+
+    # Available numeric stats (same rule as elsewhere)
+    numeric_cols = [c for c in df_league.columns if pd.api.types.is_numeric_dtype(df_league[c]) and c not in ['Age', 'Mins']]
+    if not numeric_cols:
+        st.warning("No numeric stat columns found.")
+    else:
+        display_names = {c: stat_display_names.get(c, c) for c in numeric_cols}
+
+        # Stat picker (up to 10); if more are selected, we silently use the first 10
+        picked_labels = st.multiselect("Pick up to 10 stats to filter by", [display_names[c] for c in numeric_cols])
+        selected_stats = [c for c in numeric_cols if display_names[c] in picked_labels][:10]
+        if len(picked_labels) > 10:
+            st.warning("Only the first 10 selected stats are used.")
+
+        if not selected_stats:
+            st.info("Choose at least one stat to start filtering.")
+        else:
+            st.markdown("**Minimum percentiles** (per stat):")
+
+            # One slider per selected stat
+            cols = st.columns(min(5, len(selected_stats)))
+            thresholds = {}
+            for i, s in enumerate(selected_stats):
+                with cols[i % len(cols)]:
+                    thresholds[s] = st.slider(
+                        f"{display_names[s]}",
+                        min_value=0, max_value=100, value=80, step=1,
+                        help=f"Players must meet or exceed this percentile (vs {'ALL players' if baseline_key=='global' else 'same-position players'})."
+                    )
+
+            max_results = st.slider("Max players to show", 10, 200, 60, step=10)
+
+            # Compute percentiles table (GLOBAL by default for Mode 14)
+            with st.spinner("Computing percentiles..."):
+                pct_df = _compute_percentiles_table(df_league, selected_stats, baseline=baseline_key)
+
+            dfq = df_league.join(pct_df)
+
+            # Build mask: players must pass all percentile thresholds
+            mask = pd.Series(True, index=dfq.index)
+            for s in selected_stats:
+                mask &= dfq[f"pct_{s}"].fillna(-1) >= thresholds[s]
+
+            matches = dfq[mask].copy()
+
+            if matches.empty:
+                st.info("No players matched those filters. Try lowering one or more thresholds.")
+            else:
+                # Rank by the average of the selected percentiles
+                pct_cols = [f"pct_{s}" for s in selected_stats]
+                matches["AvgSelectedPct"] = matches[pct_cols].mean(axis=1, skipna=True)
+                matches = matches.sort_values("AvgSelectedPct", ascending=False)
+
+                st.success(f"{len(matches)} players matched. Showing top {min(max_results, len(matches))}.")
+
+                # --- Simple card styling ---
+                st.markdown("""
+                <style>
+                /* Cards */
+                .pf-card {
+                    border: 1px solid #e1e1e1;
+                    background: #ffffff;
+                    border-radius: 16px;
+                    padding: 12px 14px;
+                    margin-bottom: 12px;
+                    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                }
+
+                /* Make ALL text inside the card black */
+                .pf-card, .pf-card * {
+                    color: #000 !important;
+                }
+
+                .pf-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 4px; }
+                .pf-sub   { font-size: 0.9rem;  margin-bottom: 8px; }
+                .pf-stats { font-size: 0.9rem;  line-height: 1.35; }
+
+                .pf-statline {
+                    display: flex;
+                    justify-content: space-between;
+                    border-bottom: 1px dashed #eee;
+                    padding: 4px 0;
+                }
+
+                /* Remove the slight fade; keep black */
+                .pf-statname { opacity: 1 !important; }
+                .pf-statpct  { font-weight: 700; }
+                </style>
+                """, unsafe_allow_html=True)
+
+                # Render cards in 3 columns
+                cols = st.columns(3)
+                shown = 0
+                for _, r in matches.head(max_results).iterrows():
+                    col = cols[shown % 3]
+                    with col:
+                        # Safe/int age
+                        try:
+                            age_val = r.get("Age", np.nan)
+                            age_txt = f"{int(round(age_val))}" if pd.notnull(age_val) else "?"
+                        except Exception:
+                            age_txt = str(r.get("Age", "?"))
+
+                        squad = r.get("Squad", "?")
+                        pos   = r.get("Pos", "?")
+                        name  = r.get("Player", "?")
+
+                        # Build stat lines
+                        lines_html = []
+                        for s in selected_stats:
+                            pct = r.get(f"pct_{s}", np.nan)
+                            pct_txt = f"{pct:.1f}%" if pd.notnull(pct) else "—"
+                            lines_html.append(
+                                f"<div class='pf-statline'><span class='pf-statname'>{stat_display_names.get(s, s)}</span>"
+                                f"<span class='pf-statpct'>{pct_txt}</span></div>"
+                            )
+
+                        st.markdown(
+                            f"""
+                            <div class="pf-card">
+                              <div class="pf-title">{name}</div>
+                              <div class="pf-sub">{squad} • Age {age_txt} • {pos}</div>
+                              <div class="pf-stats">{''.join(lines_html)}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    shown += 1
