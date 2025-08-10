@@ -1056,7 +1056,7 @@ if mode == "1":
                     mime="image/png",
                 )
             except Exception:
-                st.caption("To enable PNG downloads for Plotly charts, install **kaleido**: pip install -U kaleido")
+                pass
             lines = [f"{other_row['Player']} (Age: {int(other_row.get('Age',np.nan)) if pd.notnull(other_row.get('Age',np.nan)) else '?'} , Club: {other_row.get('Squad','?')}, Minutes: {other_row.get('Mins','?')})",
                      f"Compared vs baseline: {player_row['Player']} — Role: {role_name}"]
             for s in role_stats:
