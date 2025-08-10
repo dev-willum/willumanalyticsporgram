@@ -754,6 +754,9 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
             angularaxis=dict(color="#000", tickfont=dict(color="#000"))
         ),
         showlegend=True,
+        legend=dict(
+            font=dict(family=FONT_FAMILY, size=12, color="#000"),
+        ),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         height=650,
     )
