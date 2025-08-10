@@ -34,6 +34,8 @@ import streamlit as st
 from PIL import Image
 import requests
 
+import kaleido
+
 # =========================
 # ====== CONFIG & DATA ====
 
