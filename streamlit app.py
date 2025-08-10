@@ -93,10 +93,10 @@ position_groups = {
 
 # Pizza plot categories
 pizza_plot_categories = {
-    "Passing": ["compPass/90", "attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90"],
-    "Defending": ["tackles/90", "Tkl+Int/90", "interceptions/90", "pAdjtacklesWon/90", "pAdjinterceptions/90", "clearances/90", "dribbledPast/90", "Blocked/90", "errors/90", "shotsBlocked/90", "passesBlocked/90", "tackleSuccessRate", "ballRecoveries/90", "midThirdTackles/90"],
-    "Carrying": ["progCarries/90", "thirdCarries/90", "Carries/90", "takeOnsAtt/90", "Succ/90", "att3rdTouches/90", "fouled/90"],
-    "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh"],
+    "Passing": ["compPass/90", "attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90","pAdjprogPasses/90","pAdjxAG/90"],
+    "Defending": ["tackles/90", "Tkl+Int/90", "interceptions/90", "pAdjtacklesWon/90", "pAdjinterceptions/90", "clearances/90", "dribbledPast/90", "Blocked/90", "errors/90", "shotsBlocked/90", "passesBlocked/90", "tackleSuccessRate", "ballRecoveries/90", "midThirdTackles/90","pAdjclearances/90","pAdjshotsBlocked/90","pAdjtackles/90"],
+    "Carrying": ["progCarries/90", "thirdCarries/90", "Carries/90", "takeOnsAtt/90", "Succ/90", "att3rdTouches/90", "fouled/90","pAdjprogCarries/90","pAdjtouches/90"],
+    "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh","pAdjxG/90"],
     "Aerial": ["headersWon/90", "headersWon%"],
     "Ball Retention": ["touches/90", "Dispossessed/90", "Mis/90", "sPass%", "ballRecoveries/90"],
 }
@@ -174,6 +174,17 @@ stat_display_names = {
     "defPenTouches/90": "Defensive Penalty Touches/90",
     "def3rdTouches/90": "Defensive Third Touches/90",
     "mid3rdTouches/90": "Middle Third Touches/90",
+    "pAdjprogPasses/90" : "Posession Adjusted Progressive Passes/90",
+    "pAdjxG/90" : "Possession Adjusted Expected Goals/90",
+    "pAdjtb/90" : "Possession Adjusted Through Balls/90",
+    "pAdjtouches/90" : "Possession Adjusted Touches/90",
+    "pAdjxAG/90" : "Possession Adjusted Expected Assisted Goals/90",
+    "pAdjclearances/90" : "Possession Adjusted Clearances/90",
+    "pAdjshotsBlocked/90" : "Possession Adjusted Shots Blocked/90",
+    "pAdjprogCarries/90" : "Possession Adjusted Progressive Carries/90",
+    "pAdjtackles/90" : "Possession Adjusted Tackles/90"
+
+
 }
 
 # Role weights
@@ -181,8 +192,8 @@ position_weights = {
     "CB - Ball-Playing": {
         "progPasses/90": 1.7, "compPass/90": 1.6, "pass%": 1.9,
         "headersWon%": 1.4, "headersWon/90": 1.3,
-        "interceptions/90": 1.3, "clearances/90": 1.2, "tackles/90": 1.2,
-        "tackleSuccessRate": 1.8, "progCarryDist/90": 1.5, "lPass%": 1.5, "pAdjtacklesWon/90": 1.1
+        "interceptions/90": 1.3, "clearances/90": 1.2, "tackles/90": 1.1,
+        "tackleSuccessRate": 1.8, "progCarryDist/90": 1.5, "lPass%": 1.5, "pAdjtacklesWon/90": 1.7
     },
     "CB - Stopper": {
         "tackles/90": 1.8, "Tkl+Int/90": 1.7, "clearances/90": 1.6,
