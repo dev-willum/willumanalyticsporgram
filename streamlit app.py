@@ -9,7 +9,7 @@ import io
 import numpy as np
 import pandas as pd
 from scipy import stats
-
+import kaleido  # for Plotly image export
 # Plotly
 import plotly.graph_objects as go
 from plotly.colors import sample_colorscale
@@ -46,7 +46,6 @@ GABARITO_BOLD_PATH = os.path.join(APP_DIR, "fonts", "Gabarito-Bold.ttf")
 def _fontprops_or_fallback(ttf_path: str, fallback_family: str = "DejaVu Sans"):
     try:
         if os.path.isfile(ttf_path):
-            # Optional: register with Matplotlib so the name resolves in some contexts
             try:
                 fm.fontManager.addfont(ttf_path)
             except Exception:
@@ -56,17 +55,12 @@ def _fontprops_or_fallback(ttf_path: str, fallback_family: str = "DejaVu Sans"):
         pass
     return fm.FontProperties(family=fallback_family)
 
-# Used by matplotlib/mplsoccer text & PyPizza params/values
 font_normal = _fontprops_or_fallback(GABARITO_REG_PATH)
 font_bold   = _fontprops_or_fallback(GABARITO_BOLD_PATH)
 
-# Global font stack for Plotly & UI
 FONT_FAMILY = "Gabarito, DejaVu Sans, Arial, sans-serif"
-
-# Matplotlib default fallback chain (helps everywhere)
 mpl.rcParams["font.family"] = ["Gabarito", "DejaVu Sans", "Arial", "sans-serif"]
 
-# Inject webfont so browsers actually render Gabarito for Plotly/UI
 st.markdown(
     """
     <link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;700&display=swap" rel="stylesheet">
@@ -79,11 +73,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Colors / theme
-POSTER_BG = "#f1ffcd"  # pastel green vibe for plots background
-HOVER_BG = "#f5f5dc"   # beige hover background
+POSTER_BG = "#f1ffcd"
+HOVER_BG = "#f5f5dc"
 
-# Position groups
 position_groups = {
     'GK': ['GK'],
     'DF': ['CB', 'FB', 'WB', 'LB', 'RB', 'LWB', 'RWB', 'SW', 'DF'],
@@ -91,7 +83,6 @@ position_groups = {
     'FW': ['CF', 'ST', 'WF', 'FW']
 }
 
-# Pizza plot categories
 pizza_plot_categories = {
     "Passing": ["compPass/90", "attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90","pAdjprogPasses/90","pAdjxAG/90"],
     "Defending": ["tackles/90", "Tkl+Int/90", "interceptions/90", "pAdjtacklesWon/90", "pAdjinterceptions/90", "clearances/90", "dribbledPast/90", "Blocked/90", "errors/90", "shotsBlocked/90", "passesBlocked/90", "tackleSuccessRate", "ballRecoveries/90", "midThirdTackles/90","pAdjclearances/90","pAdjshotsBlocked/90","pAdjtackles/90"],
@@ -101,17 +92,14 @@ pizza_plot_categories = {
     "Ball Retention": ["touches/90", "Dispossessed/90", "Mis/90", "sPass%", "ballRecoveries/90"],
 }
 
-# Category palette + mapping
 category_palette = ["#2E4374", "#1A78CF", "#D70232", "#FF9300", "#44C3A1", "#CA228D", "#E1C340", "#7575A9", "#9DDFD3"]
 category_by_param = {}
 for i, (cat, stats_list) in enumerate(pizza_plot_categories.items()):
     for stat in stats_list:
         category_by_param[stat] = category_palette[i % len(category_palette)]
 
-# Greens for similarity bars
 greens_hex = ["#1fa44b"]*6 + ["#158940", "#0e6d31", "#085222", "#053617"]
 
-# Display names (pretty labels)
 stat_display_names = {
     "tackles/90": "Tackles/90",
     "pAdjtacklesWon/90": "Possession Adjusted Tackles Won/90",
@@ -163,7 +151,6 @@ stat_display_names = {
     "midThirdTackles/90": "Mid Third Tackles/90",
     "sPass%": "Short Pass %",
     "G/Sh": "Goals per Shot",
-    # extras if present:
     "touches/90": "Touches/90",
     "fouled/90": "Fouled/90",
     "progCarryDist/90": "Progressive Carry Distance/90",
@@ -185,26 +172,19 @@ stat_display_names = {
     "pAdjtackles/90" : "Possession Adjusted Tackles/90"
 }
 
-# Role weights
 position_weights = {
-
-    #non specific positions
     "Water Carrier": {
         "progCarries/90": 1.2, "thirdCarries/90": 1.1, "passesBlocked/90": 1.0,
         "pAdjtackles/90": 0.9, "pAdjinterceptions/90": 0.8, "pAdjclearances/90": 0.7, "pass%": 1.1
     },
-
     "Utility": {
         "progCarries/90": 1.2, "thirdCarries/90": 1.1, "passesBlocked/90": 1.0,
         "pAdjtackles/90": 0.9, "pAdjinterceptions/90": 0.8, "pAdjclearances/90": 0.7
     },
-
-    #positional profiles
-
     "CB - Ball-Playing": {
-        "progPasses/90": 1.7, "compPass/90": 1.6, "pass%": 1.9,
+        "progPasses/90": 1.7, "pass%": 1.9,
         "headersWon%": 1.4, "headersWon/90": 1.3,
-        "interceptions/90": 1.3, "clearances/90": 1.2, "tackles/90": 1.1,
+        "interceptions/90": 1.3, "pAdjclearances/90": -0.1, "tackles/90": 1.1,
         "tackleSuccessRate": 1.8, "progCarryDist/90": 1.5, "lPass%": 1.5, "pAdjtacklesWon/90": 1.7
     },
     "CB - Stopper": {
@@ -289,10 +269,8 @@ position_weights = {
         "xG/90": 1.9, "goals/90": 1.9, "npg/90": 1.8, "Sh/90": 1.7,
         "progCarries/90": 1.6, "SCA90": 1.5, "thirdCarries/90": 1.5, "SoT/90": 1.5, "xAG/90": 1.2
     }
-
 }
 
-# Role-specific tweaks
 position_adjustments = {
     "CB - Ball-Playing": lambda x: min(x * 1.03, 100),
     "CB - Stopper":      lambda x: min(x * 1.05, 100),
@@ -303,19 +281,12 @@ position_adjustments = {
     "Winger - Inverted": lambda x: min(x * 1.03, 100)
 }
 
-# Archetypes
 archetype_params = {role: list(weights.keys()) for role, weights in position_weights.items()}
 category_archetypes = {f"{cat} Pizza": stats for cat, stats in pizza_plot_categories.items()}
 archetype_params_full = {**archetype_params, **category_archetypes}
 
-# ----------------------
-# App config/theme
-# ----------------------
 st.set_page_config(page_title="willumanalytics", layout="wide")
 
-# ==============
-# IO + CACHING
-# ==============
 @st.cache_data
 def load_csvs(base_folder: str, which: str):
     files = []
@@ -328,23 +299,21 @@ def load_csvs(base_folder: str, which: str):
                  os.path.join(base_folder, "BigDB.csv")]
     dfs = []
     for p in files:
-        if os.path.isfile(p):
-            dfs.append(pd.read_csv(p))
+        if os.path.isfile(p) or base_folder == "":
+            try:
+                dfs.append(pd.read_csv(p if base_folder != "" else os.path.basename(p)))
+            except FileNotFoundError:
+                st.warning(f"File not found: {p if base_folder != '' else os.path.basename(p)}")
         else:
             st.warning(f"File not found: {p}")
     if not dfs:
         st.stop()
     df = pd.concat(dfs, ignore_index=True)
 
-    # --- Age sanitization (global) ---
     df['Age'] = pd.to_numeric(df.get('Age', np.nan), errors='coerce')
-    # integer for display; keep a numeric column for color scales
     df['Age_num'] = df['Age'].round().astype('Int64')
     return df
 
-# ============
-# UTILITIES
-# ============
 def apply_hover_style(fig):
     fig.update_layout(
         hoverlabel=dict(
@@ -352,19 +321,16 @@ def apply_hover_style(fig):
             font=dict(family=FONT_FAMILY, size=13, color="#000")
         )
     )
-    # enforce global font on every figure
     fig.update_layout(font=dict(family=FONT_FAMILY))
 
-# --- Title helpers for reflecting sidebar position filter ---
 def _positions_suffix() -> str:
     pos = st.session_state.get("pos_filter", [])
-    return f" | Compared Against: {', '.join(pos)}" if pos else ""
+    return f" | Positions Filtered: {', '.join(pos)}" if pos else ""
 
 def _with_pos_filter(title: str) -> str:
     return f"{title}{_positions_suffix()}"
 
 def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_name: str | None):
-    # Build label set: top & bottom 3 for X and Y
     label_set = set()
     if not dfx.empty:
         for col, fn in [(x_col, pd.DataFrame.nlargest), (x_col, pd.DataFrame.nsmallest),
@@ -378,7 +344,6 @@ def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_
             except Exception:
                 pass
 
-    # Fuzzy find searched player using your existing finder
     highlight = None
     if search_name:
         row = find_player_row(dfx, search_name)
@@ -386,19 +351,16 @@ def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_
             highlight = row['Player']
             label_set.add(highlight)
 
-    # Marker style: grey out others when highlighting
     if highlight:
-        marker_colors = np.where(dfx['Player'] == highlight, "#B80019", "#B8B8B8")  # red vs grey
+        marker_colors = np.where(dfx['Player'] == highlight, "#B80019", "#B8B8B8")
         marker_sizes  = np.where(dfx['Player'] == highlight, 14, 8)
         marker_lines  = np.where(dfx['Player'] == highlight, "#000000", "#666666")
     else:
-        marker_colors = ["#6FA7D6"] * len(dfx)  # soft blue baseline
+        marker_colors = ["#6FA7D6"] * len(dfx)
         marker_sizes  = [9] * len(dfx)
         marker_lines  = ["#333333"] * len(dfx)
 
-    # Text labels for selected points only (top/bottom & highlight)
     text_labels = dfx['Player'].where(dfx['Player'].isin(label_set), "")
-
     return text_labels, marker_colors, marker_sizes, marker_lines, highlight
 
 def filter_by_minutes(df, min_minutes):
@@ -449,6 +411,29 @@ def calculate_role_score(player_row, role_stats, df, role_name=None):
     role_score = position_adjustments.get(role_name, lambda x: x)(role_score)
     return float(np.clip(round(role_score, 1), 0, 100))
 
+def calculate_custom_archetype_score(player_row, stat_cols, df, weight_map: dict[str, float] | None = None):
+    if not stat_cols:
+        return np.nan
+    weight_map = weight_map or {}
+    percentiles, weights = [], []
+    for s in stat_cols:
+        if s not in df.columns:
+            continue
+        pctl = position_relative_percentile(df, player_row, s)
+        if pd.notnull(pctl):
+            percentiles.append(pctl)
+            weights.append(float(weight_map.get(s, 1.0)))
+    if not percentiles:
+        return np.nan
+    try:
+        if len(percentiles) >= 3 and any(w != 0 for w in weights):
+            score = np.average(percentiles, weights=weights)
+        else:
+            score = float(np.mean(percentiles))
+    except Exception:
+        score = float(np.mean(percentiles))
+    return float(np.clip(round(score, 2), 0, 100))
+
 def get_contrast_text_color(hex_color):
     r, g, b = mcolors.hex2color(hex_color)
     brightness = (r*299 + g*587 + b*114) * 255 / 1000
@@ -489,23 +474,19 @@ def league_strip_prefix(comp):
             return comp[len(prefix):]
     return comp
 
-# ---- download helpers ----
 def fig_to_png_bytes_plotly(fig):
-    # requires kaleido: pip install -U kaleido
     return fig.to_image(format="png", scale=2)
 
-# >>> FIX 2/2: draw canvas + preserve facecolor before saving
 def fig_to_png_bytes_matplotlib(fig):
     buf = BytesIO()
     try:
-        fig.canvas.draw()  # ensure the figure is rendered
+        fig.canvas.draw()
     except Exception:
         pass
     fig.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor())
     buf.seek(0)
     return buf.getvalue()
 
-# ---------- DOT NAV + HELPERS ----------
 def set_mode(new_mode: str):
     st.session_state["mode"] = new_mode
 
@@ -514,21 +495,32 @@ def dot_nav(mode_labels_to_keys, default_key):
         st.session_state["mode"] = default_key
     st.markdown("""
         <style>
-        .dot { font-size:22px; text-align:center; }
-        .active { color:#1A78CF; }
-        .inactive { color:#A8A8A8; }
+          .mode-label { font-size: 12px; line-height: 1.1; padding-left: .25rem; }
+          .mode-label.active { color:#1A78CF; font-weight:600; }
+          .mode-label.inactive { color:#666; }
+          div.dotbtn > div > button, .dotbtn button {
+            border-radius: 999px !important;
+            padding: 0.2rem 0.55rem !important;
+            min-height: auto !important;
+            line-height: 1 !important;
+          }
         </style>
     """, unsafe_allow_html=True)
+
     cols = st.columns(len(mode_labels_to_keys))
     for i, (label, key) in enumerate(mode_labels_to_keys):
         active = (st.session_state["mode"] == key)
+        dot_char = "●" if active else "○"
         with cols[i]:
-            if st.button(label, key=f"lbl_{key}", use_container_width=True):
-                set_mode(key)
-            st.markdown(
-                f"<div class='dot {'active' if active else 'inactive'}'>{'●' if active else '○'}</div>",
-                unsafe_allow_html=True
-            )
+            left, right = st.columns([1, 5])
+            with left:
+                if st.button(dot_char, key=f"dot_{key}", help=label):
+                    set_mode(key)
+            with right:
+                st.markdown(
+                    f"<div class='mode-label {'active' if active else 'inactive'}'>{label}</div>",
+                    unsafe_allow_html=True
+                )
 
 def find_player_row(df, name_query):
     if not name_query:
@@ -580,10 +572,8 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
     raw_vals = [player_row.get(s, float('nan')) for s in stat_cols]
     pcts = [position_relative_percentile(df_filtered, player_row, s) if np.isfinite(player_row.get(s, np.nan)) else 0 for s in stat_cols]
 
-    # Dynamic per-slice text colours based on slice fill
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
     text_colors = [get_contrast_text_color(c) for c in slice_colors]
-
     display_params = [break_label(stat_display_names.get(p, p), 15) for p in stat_cols]
 
     bg = "#f1ffcd" if lightmode else "#222222"
@@ -605,13 +595,12 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
         figsize=(10, 11),
         color_blank_space="same",
         slice_colors=slice_colors,
-        value_colors=text_colors,            # << dynamic contrast applied here
-        value_bck_colors=slice_colors,       # keep chips matching the slice colour
+        value_colors=text_colors,
+        value_bck_colors=slice_colors,
         blank_alpha=0.4,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
         kwargs_params=dict(color=param_color, fontsize=16, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
-            # per-slice colour comes from value_colors; this is a fallback only
             color="#222222" if lightmode else "#fffff0",
             fontsize=12, fontproperties=font_normal, zorder=3,
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.2", lw=1)
@@ -630,7 +619,6 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  fontweight='bold', color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.952, f"{club} | {nationality} | {age_txt} | {season}", ha='center', va='top', fontsize=15,
                  color=header_color, fontproperties=font_normal)
-        # include sidebar position filter suffix
         suffix = _positions_suffix()
         fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}{suffix}",
                  ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
@@ -638,7 +626,6 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  ha='center', va='bottom', fontsize=9, color=("#666" if lightmode else "#CCC"),
                  fontproperties=font_normal, alpha=0.85)
 
-        # Role Score badge appears ONLY when toppings=True and explicitly enabled
         if show_role_score:
             role_stats = archetype_params_full.get(role_name, [])
             score = calculate_role_score(player_row, role_stats, df_filtered, role_name)
@@ -652,7 +639,6 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                 zorder=5
             )
 
-    # >>> keep fig alive for download
     st.pyplot(fig, clear_figure=False)
     return fig
 
@@ -662,7 +648,6 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
     dfc['RoleScore'] = [calculate_role_score(row, role_stats, dfc, role_name) for _, row in dfc.iterrows()]
     top = dfc.nlargest(10, 'RoleScore').reset_index(drop=True)
 
-    # light-blue gradient (no black bars)
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
                     "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
     bar_colors = pastel_blues[-len(top):][::-1]
@@ -703,8 +688,6 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
 
 def show_top_players_by_stat(df, tidy_label, stat_col):
     top = df.nlargest(10, stat_col).reset_index(drop=True)
-
-    # pastel light-blue palette
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
                     "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
     bar_colors = pastel_blues[-len(top):][::-1]
@@ -754,7 +737,6 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     top_players = df_filtered.iloc[top_idx].copy()
     top_players['Similarity'] = sim[top_idx] * 100.0
 
-    # Contrast text on the uniform green bars
     bar_fill = "#1fa44b"
     r, g, b = [x*255 for x in mcolors.hex2color(bar_fill)]
     luminance = 0.299*r + 0.587*g + 0.114*b
@@ -768,7 +750,7 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
             text=[f"{s:.2f}%" for s in top_players['Similarity'][::-1]],
             textposition='inside',
             marker=dict(color=bar_fill, line=dict(width=1, color='#333')),
-            textfont=dict(color=inside_text_color, family=FONT_FAMILY)  # << dynamic contrast
+            textfont=dict(color=inside_text_color, family=FONT_FAMILY)
         )
     ])
     fig.update_layout(
@@ -801,7 +783,7 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
         ),
         showlegend=True,
         legend=dict(
-            font=dict(family=FONT_FAMILY, size=12, color="#000"),  # legend text black
+            font=dict(family=FONT_FAMILY, size=12, color="#000"),
         ),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         height=650,
@@ -811,7 +793,6 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
     return fig
 
 
-# ======== SCATTER STYLE HELPER (Matplotlib) ========
 def style_scatter_axes(ax, title_text):
     ax.set_title(title_text, fontsize=14, pad=8, fontproperties=font_normal, color="#000")
     ax.tick_params(colors="#000", labelsize=10)
@@ -822,7 +803,6 @@ def style_scatter_axes(ax, title_text):
         spine.set_linewidth(1)
 
 
-# ======== POSTER HELPERS (kept, not exposed in UI) ========
 def pizza_fig_to_array(fig, dpi=220):
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
@@ -842,11 +822,8 @@ def build_pizza_figure(
         if np.isfinite(player_row.get(s, np.nan)) else 0
         for s in stat_cols
     ]
-
-    # Dynamic per-slice text colours based on slice fill
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
     text_colors  = [get_contrast_text_color(c) for c in slice_colors]
-
     display_params = [break_label(stat_display_names.get(p, p), 15) for p in stat_cols]
     bg = POSTER_BG if lightmode else "#222222"
     param_color = "#222222" if lightmode else "#fffff0"
@@ -867,7 +844,7 @@ def build_pizza_figure(
         figsize=(8.5, 8.8),
         color_blank_space="same",
         slice_colors=slice_colors,
-        value_colors=text_colors,            # << dynamic contrast applied here
+        value_colors=text_colors,
         value_bck_colors=slice_colors,
         blank_alpha=0.40,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
@@ -878,7 +855,6 @@ def build_pizza_figure(
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.18", lw=1)
         )
     )
-    # Only when toppings=True and enabled
     if show_role_score and toppings:
         role_stats = archetype_params_full.get(role_name, [])
         score = calculate_role_score(player_row, role_stats, df, role_name)
@@ -953,9 +929,6 @@ def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_ur
     return fig
 
 
-# ====================
-# STREAMLIT RENDERER (kept but hidden from UI)
-# ====================
 def render_player_dashboard(player_row, df):
     if player_row is None:
         st.info("Type or pick a player in the sidebar first.")
@@ -990,7 +963,10 @@ def render_player_dashboard(player_row, df):
 # SIDEBAR + CONTROLS
 # =====================
 st.sidebar.header("Data & Filters")
-BASE = st.sidebar.text_input("Base folder", "")
+
+# No front-end filepath control — use working directory like before.
+BASE = ""  # empty string -> look for CSVs relative to current working directory
+
 db_choice = st.sidebar.selectbox(
     "Database",
     ["BigDB_ALL.csv (Minor Leagues)", "BigDB.csv (Big 5 European Leagues)", "Both"],
@@ -998,31 +974,26 @@ db_choice = st.sidebar.selectbox(
 )
 df = load_csvs(BASE, db_choice)
 
-# Position filter
 st.sidebar.write("Available positions: GK, DF, MF, FW")
 pos_sel = st.sidebar.multiselect("Filter by position(s) (optional)", ["GK","DF","MF","FW"])
 if pos_sel:
     mask = df['Pos'].apply(lambda x: any(p in str(x).split(',') for p in pos_sel))
     df = df[mask]
-# reflect position filter in titles
 st.session_state["pos_filter"] = pos_sel[:] if pos_sel else []
 
 min_minutes = st.sidebar.number_input("Minimum minutes", min_value=0, max_value=10000, value=900, step=30)
 df = filter_by_minutes(df, min_minutes)
 
-# Player selection + fuzzy
 player_list = df['Player'].dropna().unique().tolist()
 player_name = st.sidebar.selectbox("Player (dropdown)", player_list) if len(player_list) else None
 typed_query = st.sidebar.text_input("Or type a player name")
 typed_row = find_player_row(df, typed_query) if typed_query else None
 player_row = typed_row if typed_row is not None else (df[df['Player'] == player_name].iloc[0] if player_name else None)
 
-# Archetype selection
 arch_keys = list(archetype_params_full.keys())
 arch_choice = st.sidebar.selectbox("Archetype", arch_keys) if arch_keys else None
 stat_cols_for_arch = archetype_params_full.get(arch_choice, []) if arch_choice else []
 
-# League filter helper
 def league_filter_ui(dfin):
     dfin = dfin.copy()
     dfin['LeagueName'] = dfin['Comp'].apply(league_strip_prefix)
@@ -1032,9 +1003,6 @@ def league_filter_ui(dfin):
         dfin = dfin[dfin['LeagueName'].isin(chosen)]
     return dfin.drop(columns=['LeagueName'], errors='ignore')
 
-# ======================
-# MODE SELECTOR (Top dots)
-# ======================
 MODE_ITEMS = [
     ("Similar", "1"),
     ("Percentiles", "2"),
@@ -1042,9 +1010,7 @@ MODE_ITEMS = [
     ("Role Leaders", "4"),
     ("Best Roles", "5"),
     ("Stat Leaders", "6"),
-    ("Pizza Dark (no toppings)", "8"),
-    ("Pizza Light", "9"),
-    ("Pizza Light (no toppings)", "10"),
+    ("Custom Archetype", "7"),
     ("Stat Scatter", "12"),
     ("Role Matrix", "13"),
 ]
@@ -1053,9 +1019,6 @@ mode = st.session_state["mode"]
 
 st.title("willum's analytics")
 
-# ===============
-# MODE HANDLERS
-# ===============
 if mode == "1":
     if player_row is None or arch_choice is None:
         st.info("Pick a player and archetype in the sidebar.")
@@ -1116,11 +1079,35 @@ elif mode == "3":
         st.info("Pick a player and archetype in the sidebar.")
     else:
         role_name = arch_choice
-        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=False, toppings=True, show_role_score=True)
+        style_options = [
+            "Light (toppings)",
+            "Dark (toppings)",
+            "Light (no toppings)",
+            "Dark (no toppings)",
+        ]
+        chosen_style = st.selectbox("Pizza style", style_options, index=0)
+        style_cfg = {
+            "Light (toppings)":       (True,  True),
+            "Dark (toppings)":        (False, True),
+            "Light (no toppings)":    (True,  False),
+            "Dark (no toppings)":     (False, False),
+        }
+        lightmode, toppings = style_cfg[chosen_style]
+        fig = show_pizza(
+            player_row,
+            stat_cols_for_arch,
+            df,
+            role_name,
+            lightmode=lightmode,
+            toppings=toppings,
+            show_role_score=toppings
+        )
+        style_slug = ("light" if lightmode else "dark") + ("_toppings" if toppings else "_notoppings")
+        btn_label = f"Download pizza ({chosen_style}) PNG"
         st.download_button(
-            "Download pizza (dark, toppings) PNG",
+            btn_label,
             data=fig_to_png_bytes_matplotlib(fig),
-            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_dark_toppings.png",
+            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_{style_slug}.png",
             mime="image/png"
         )
 
@@ -1132,7 +1119,6 @@ elif mode == "4":
     csv = top[['Player','Age','Squad','Nation','Mins','RoleScore'] + role_stats].copy()
     csv['Role'] = role_name
     st.download_button("Download CSV", csv.to_csv(index=False).encode("utf-8"), file_name=f"top_{role_name.replace(' ','_')}.csv")
-
 
 elif mode == "5":
     if player_row is None:
@@ -1211,44 +1197,97 @@ elif mode == "6":
         df_league = league_filter_ui(df)
         top, fig = show_top_players_by_stat(df_league, x, stat_col)
 
-elif mode == "8":
-    if player_row is None or arch_choice is None:
-        st.info("Pick a player and archetype in the sidebar.")
+elif mode == "7":
+    st.subheader("Custom Archetype")
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
+    if not numeric_cols:
+        st.warning("No numeric stat columns found.")
     else:
-        role_name = arch_choice
-        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=False, toppings=False, show_role_score=False)
-        st.download_button(
-            "Download pizza (dark, no toppings) PNG",
-            data=fig_to_png_bytes_matplotlib(fig),
-            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_dark_notoppings.png",
-            mime="image/png"
-        )
+        display_names = {c: stat_display_names.get(c, c) for c in numeric_cols}
+        name_default = st.session_state.get("custom_arch_name", "Custom Archetype")
+        custom_name = st.text_input("Archetype name", value=name_default, key="custom_arch_name")
 
-elif mode == "9":
-    if player_row is None or arch_choice is None:
-        st.info("Pick a player and archetype in the sidebar.")
-    else:
-        role_name = arch_choice
-        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=True, toppings=True, show_role_score=True)
-        st.download_button(
-            "Download pizza (light, toppings) PNG",
-            data=fig_to_png_bytes_matplotlib(fig),
-            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_light_toppings.png",
-            mime="image/png"
-        )
+        picked_labels = st.multiselect("Pick up to 10 stats", [display_names[c] for c in numeric_cols])
+        stat_cols = [c for c in numeric_cols if display_names[c] in picked_labels][:10]
+        if len(picked_labels) > 10:
+            st.warning("Only the first 10 selected stats are used.")
 
-elif mode == "10":
-    if player_row is None or arch_choice is None:
-        st.info("Pick a player and archetype in the sidebar.")
-    else:
-        role_name = arch_choice
-        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=True, toppings=False, show_role_score=False)
-        st.download_button(
-            "Download pizza (light, no toppings) PNG",
-            data=fig_to_png_bytes_matplotlib(fig),
-            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_light_notoppings.png",
-            mime="image/png"
-        )
+        if not stat_cols:
+            st.info("Choose at least one stat to build your archetype.")
+        else:
+            st.markdown("**Weights** (higher = more important; negatives allowed):")
+            cols = st.columns(min(5, len(stat_cols)))
+            weights = {}
+            for i, s in enumerate(stat_cols):
+                with cols[i % len(cols)]:
+                    weights[s] = st.number_input(
+                        f"{display_names[s]}",
+                        value=1.0, step=0.1, format="%.2f", key=f"wt_{s}"
+                    )
+
+            df_league = league_filter_ui(df)
+
+            dfc = df_league.copy()
+            dfc['CustomScore'] = [calculate_custom_archetype_score(r, stat_cols, df_league, weights) for _, r in df_league.iterrows()]
+            top = dfc.dropna(subset=['CustomScore']).nlargest(10, 'CustomScore').reset_index(drop=True)
+
+            pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
+                            "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
+            bar_colors = pastel_blues[-len(top):][::-1]
+            def lum(c):
+                r,g,b = [x*255 for x in mcolors.hex2color(c)]
+                return 0.299*r + 0.587*g + 0.114*b
+            bar_text_colors = ['white' if lum(c) < 150 else '#222' for c in bar_colors]
+            labels = [
+                f"{row['Player']} • {row['CustomScore']:.2f} • "
+                f"{int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • "
+                f"{row.get('Squad','?')} • {int(row.get('Mins',0)):,} mins"
+                for _, row in top.iterrows()
+            ]
+            fig = go.Figure([
+                go.Bar(
+                    x=top['CustomScore'],
+                    y=[f"#{i+1}" for i in range(len(top))],
+                    orientation='h',
+                    text=labels,
+                    textposition='inside',
+                    insidetextanchor='middle',
+                    marker=dict(color=bar_colors, line=dict(color='#333', width=1)),
+                    textfont=dict(color=bar_text_colors, size=13, family=FONT_FAMILY),
+                    hovertext=[f"{row['Player']} ({row['Squad']})" for _, row in top.iterrows()],
+                    hoverinfo="text"
+                )
+            ])
+            fig.update_layout(
+                title=dict(text=_with_pos_filter(f"Top 10 — {custom_name}"), font=dict(color="#000", family=FONT_FAMILY)),
+                plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
+                xaxis=dict(title='Score (0–100)', range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+                yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+                margin=dict(l=120, r=40, t=60, b=40),
+                height=600,
+            )
+            apply_hover_style(fig)
+            st.plotly_chart(fig, use_container_width=True, theme=None)
+
+            csv_cols = ['Player','Age','Squad','Nation','Mins','CustomScore'] + stat_cols
+            st.download_button(
+                "Download leaderboard CSV",
+                data=top[csv_cols].to_csv(index=False).encode("utf-8"),
+                file_name=f"top_custom_{re.sub(r'\\W+','_',custom_name.strip())}.csv",
+                mime="text/csv"
+            )
+
+            st.divider()
+            st.markdown("### Score any player")
+            default_lookup = player_row['Player'] if player_row is not None else ""
+            lookup_name = st.text_input("Type a player name", value=default_lookup, key="custom_lookup")
+            target_row = find_player_row(df_league, lookup_name) if lookup_name else None
+            if target_row is None and lookup_name:
+                st.warning("No close match found.")
+            if target_row is not None:
+                score = calculate_custom_archetype_score(target_row, stat_cols, df_league, weights)
+                st.metric(f"{target_row['Player']} — {custom_name}", f"{score:.2f}")
+                _ = show_percentile_bar_chart(target_row, stat_cols, df_league, custom_name)
 
 elif mode == "12":
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
@@ -1262,8 +1301,6 @@ elif mode == "12":
         y_col = [c for c in numeric_cols if display_names[c] == y_pick][0]
 
         dfx = df.dropna(subset=[x_col, y_col]).copy()
-
-        # Age sanitation (intify if possible)
         try:
             dfx['Age'] = pd.to_numeric(dfx['Age'], errors='coerce').astype('Int64')
         except Exception:
@@ -1321,7 +1358,6 @@ elif mode == "13":
     dfc['RoleScore_X'] = [calculate_role_score(row, archetype_params_full[role_x], dfc, role_x) for _, row in dfc.iterrows()]
     dfc['RoleScore_Y'] = [calculate_role_score(row, archetype_params_full[role_y], dfc, role_y) for _, row in dfc.iterrows()]
 
-    # Age sanitation (intify if possible)
     try:
         dfc['Age'] = pd.to_numeric(dfc['Age'], errors='coerce').astype('Int64')
     except Exception:
