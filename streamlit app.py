@@ -183,8 +183,6 @@ stat_display_names = {
     "pAdjshotsBlocked/90" : "Possession Adjusted Shots Blocked/90",
     "pAdjprogCarries/90" : "Possession Adjusted Progressive Carries/90",
     "pAdjtackles/90" : "Possession Adjusted Tackles/90"
-
-
 }
 
 # Role weights
@@ -386,7 +384,7 @@ def filter_by_minutes(df, min_minutes):
     return df[df['Mins'] >= min_minutes]
 
 def position_relative_percentile(df, player_row, stat_col):
-    pos_str = player_row.get('Pos', '')
+    pos_str = player_row.get('Pos', ' ')
     positions = [p.strip() for p in str(pos_str).split(',') if p.strip()]
     if not positions or stat_col not in df.columns:
         return np.nan
@@ -405,7 +403,7 @@ def position_relative_percentile(df, player_row, stat_col):
 def calculate_role_score(player_row, role_stats, df, role_name=None):
     if not role_stats:
         return 50.0
-    pos_str = player_row.get('Pos', '')
+    pos_str = player_row.get('Pos', ' ')
     player_positions = [p.strip() for p in str(pos_str).split(',')] if isinstance(pos_str, str) else []
     pos_filtered_db = df[df['Pos'].apply(
         lambda s: any(pos in str(s).split(',') for pos in player_positions) if isinstance(s, str) else False
@@ -473,9 +471,14 @@ def fig_to_png_bytes_plotly(fig):
     # requires kaleido: pip install -U kaleido
     return fig.to_image(format="png", scale=2)
 
+# >>> FIX 2/2: draw canvas + preserve facecolor before saving
 def fig_to_png_bytes_matplotlib(fig):
     buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+    try:
+        fig.canvas.draw()  # ensure the figure is rendered
+    except Exception:
+        pass
+    fig.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor=fig.get_facecolor())
     buf.seek(0)
     return buf.getvalue()
 
@@ -616,7 +619,8 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                 zorder=5
             )
 
-    st.pyplot(fig, clear_figure=True)
+    # >>> FIX 1/2: do NOT clear the figure you want to save later
+    st.pyplot(fig, clear_figure=False)
     return fig
 
 def plot_role_leaderboard(df_filtered, role_name, role_stats):
@@ -910,11 +914,15 @@ def render_player_dashboard(player_row, df):
     st.pyplot(fig, clear_figure=False)
     upscale_dpi = st.slider("Download DPI (higher = larger PNG)", 200, 600, 360, step=20)
     buf = BytesIO()
+    try:
+        fig.canvas.draw()
+    except Exception:
+        pass
     fig.savefig(buf, format="png", dpi=upscale_dpi, bbox_inches="tight", facecolor=POSTER_BG)
     buf.seek(0)
     st.download_button(
         "Download Poster PNG",
-        data=buf.getvalue(),
+        data=buf,
         file_name=f"{player_row['Player'].replace(' ','_')}_dashboard_poster.png",
         mime="image/png"
     )
@@ -1146,6 +1154,32 @@ elif mode == "8":
             "Download pizza (dark, no toppings) PNG",
             data=fig_to_png_bytes_matplotlib(fig),
             file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_dark_notoppings.png",
+            mime="image/png"
+        )
+
+elif mode == "9":
+    if player_row is None or arch_choice is None:
+        st.info("Pick a player and archetype in the sidebar.")
+    else:
+        role_name = arch_choice
+        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=True, toppings=True, show_role_score=True)
+        st.download_button(
+            "Download pizza (light, toppings) PNG",
+            data=fig_to_png_bytes_matplotlib(fig),
+            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_light_toppings.png",
+            mime="image/png"
+        )
+
+elif mode == "10":
+    if player_row is None or arch_choice is None:
+        st.info("Pick a player and archetype in the sidebar.")
+    else:
+        role_name = arch_choice
+        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=True, toppings=False, show_role_score=False)
+        st.download_button(
+            "Download pizza (light, no toppings) PNG",
+            data=fig_to_png_bytes_matplotlib(fig),
+            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_light_notoppings.png",
             mime="image/png"
         )
 
