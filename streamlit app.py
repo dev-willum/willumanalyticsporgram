@@ -187,6 +187,20 @@ stat_display_names = {
 
 # Role weights
 position_weights = {
+
+    #non specific positions
+    "Water Carrier": {
+        "progCarries/90": 1.2, "thirdCarries/90": 1.1, "passesBlocked/90": 1.0,
+        "pAdjtackles/90": 0.9, "pAdjinterceptions/90": 0.8, "pAdjclearances/90": 0.7, "pass%": 1.1
+    },
+
+    "Utility": {
+        "progCarries/90": 1.2, "thirdCarries/90": 1.1, "passesBlocked/90": 1.0,
+        "pAdjtackles/90": 0.9, "pAdjinterceptions/90": 0.8, "pAdjclearances/90": 0.7
+    },
+
+    #positional profiles
+
     "CB - Ball-Playing": {
         "progPasses/90": 1.7, "compPass/90": 1.6, "pass%": 1.9,
         "headersWon%": 1.4, "headersWon/90": 1.3,
@@ -275,6 +289,7 @@ position_weights = {
         "xG/90": 1.9, "goals/90": 1.9, "npg/90": 1.8, "Sh/90": 1.7,
         "progCarries/90": 1.6, "SCA90": 1.5, "thirdCarries/90": 1.5, "SoT/90": 1.5, "xAG/90": 1.2
     }
+
 }
 
 # Role-specific tweaks
@@ -339,6 +354,14 @@ def apply_hover_style(fig):
     )
     # enforce global font on every figure
     fig.update_layout(font=dict(family=FONT_FAMILY))
+
+# --- Title helpers for reflecting sidebar position filter ---
+def _positions_suffix() -> str:
+    pos = st.session_state.get("pos_filter", [])
+    return f" | Compared Against: {', '.join(pos)}" if pos else ""
+
+def _with_pos_filter(title: str) -> str:
+    return f"{title}{_positions_suffix()}"
 
 def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_name: str | None):
     # Build label set: top & bottom 3 for X and Y
@@ -523,13 +546,6 @@ def find_player_row(df, name_query):
 # PLOT FUNCTIONS
 # =================
 
-# --- Dynamic contrast helper for text vs background (hex) ---
-def get_contrast_text_color(hex_color: str) -> str:
-    r, g, b = mcolors.hex2color(hex_color)
-    brightness = (r * 299 + g * 587 + b * 114) * 255 / 1000
-    return "#000000" if brightness > 140 else "#F2F2F2"
-
-
 def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
     vals = [player_row.get(s, np.nan) for s in stat_cols]
     percentiles = [
@@ -542,7 +558,9 @@ def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
         text=[f"{p:.1f}%" for p in percentiles], textposition="auto",
         marker=dict(color=percentiles, colorscale="RdYlGn")
     )
-    title = f"{player_row['Player']} — {role_name}<br><sup>Percentiles vs same-position players</sup>"
+    title = _with_pos_filter(
+        f"{player_row['Player']} — {role_name}<br><sup>Percentiles vs same-position players</sup>"
+    )
     fig = go.Figure([bar])
     fig.update_layout(
         title=dict(text=title, font=dict(color="#000", family=FONT_FAMILY)),
@@ -591,11 +609,11 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
         value_bck_colors=slice_colors,       # keep chips matching the slice colour
         blank_alpha=0.4,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
-        kwargs_params=dict(color=param_color, fontsize=18, fontproperties=font_normal, va="center"),
+        kwargs_params=dict(color=param_color, fontsize=16, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
             # per-slice colour comes from value_colors; this is a fallback only
             color="#222222" if lightmode else "#fffff0",
-            fontsize=15, fontproperties=font_normal, zorder=3,
+            fontsize=12, fontproperties=font_normal, zorder=3,
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.2", lw=1)
         )
     )
@@ -612,7 +630,9 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  fontweight='bold', color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.952, f"{club} | {nationality} | {age_txt} | {season}", ha='center', va='top', fontsize=15,
                  color=header_color, fontproperties=font_normal)
-        fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}",
+        # include sidebar position filter suffix
+        suffix = _positions_suffix()
+        fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}{suffix}",
                  ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.01, "willumanalytics",
                  ha='center', va='bottom', fontsize=9, color=("#666" if lightmode else "#CCC"),
@@ -624,7 +644,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
             score = calculate_role_score(player_row, role_stats, df_filtered, role_name)
             box_color = "#1A78CF" if score >= 70 else "#D70232" if score < 40 else "#FF9300"
             fig.text(
-                0.86, 0.90, f"Role Score: {score:.1f}",
+                0.82, 0.90, f"Role Score: {score:.1f}",
                 ha="center", va="top",
                 fontsize=14, fontproperties=font_normal, fontweight="bold",
                 color=("#f1ffcd" if box_color != "#FF9300" else "#222"),
@@ -669,7 +689,7 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
         )
     ])
     fig.update_layout(
-        title=dict(text=f"Top {role_name}s", font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"Top {role_name}s"), font=dict(color="#000", family=FONT_FAMILY)),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         xaxis=dict(title='Role Suitability Score (0–100)', range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -706,7 +726,7 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
         )
     ])
     fig.update_layout(
-        title=dict(text=f"Top 10: {tidy_label}", font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"Top 10: {tidy_label}"), font=dict(color="#000", family=FONT_FAMILY)),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         xaxis=dict(title=tidy_label, gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -752,7 +772,8 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
         )
     ])
     fig.update_layout(
-        title=dict(text=f"Most similar to {player_row['Player']} — {role_name}", font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"Most similar to {player_row['Player']} — {role_name}"),
+                   font=dict(color="#000", family=FONT_FAMILY)),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         xaxis=dict(title="Similarity (%)", range=[0,100], gridcolor="#222222", color="#222222", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -772,7 +793,7 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
     fig.add_trace(go.Scatterpolar(r=base_vals,  theta=labels, fill='toself', name=f"{base_row['Player']}"))
     fig.add_trace(go.Scatterpolar(r=other_vals, theta=labels, fill='toself', name=f"{other_row['Player']}"))
     fig.update_layout(
-        title=dict(text=f"{base_row['Player']} vs {other_row['Player']} — {role_name}", font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"{base_row['Player']} vs {other_row['Player']} — {role_name}"), font=dict(color="#000", family=FONT_FAMILY)),
         polar=dict(
             bgcolor=POSTER_BG,
             radialaxis=dict(visible=True, range=[0, 100], color="#000", gridcolor="#ddd", tickfont=dict(color="#000")),
@@ -983,6 +1004,8 @@ pos_sel = st.sidebar.multiselect("Filter by position(s) (optional)", ["GK","DF",
 if pos_sel:
     mask = df['Pos'].apply(lambda x: any(p in str(x).split(',') for p in pos_sel))
     df = df[mask]
+# reflect position filter in titles
+st.session_state["pos_filter"] = pos_sel[:] if pos_sel else []
 
 min_minutes = st.sidebar.number_input("Minimum minutes", min_value=0, max_value=10000, value=900, step=30)
 df = filter_by_minutes(df, min_minutes)
@@ -1110,6 +1133,7 @@ elif mode == "4":
     csv['Role'] = role_name
     st.download_button("Download CSV", csv.to_csv(index=False).encode("utf-8"), file_name=f"top_{role_name.replace(' ','_')}.csv")
 
+
 elif mode == "5":
     if player_row is None:
         st.info("Pick a player in the sidebar.")
@@ -1132,6 +1156,7 @@ elif mode == "5":
             kws = position_to_roles.get(group, [])
             relevant_roles.extend([r for r in archetype_params_full if any(kw in r for kw in kws)])
         relevant_roles = list(dict.fromkeys(relevant_roles)) or list(archetype_params_full.keys())
+
         df_for_calc = df.copy()
         role_scores, role_details = [], {}
         for role in relevant_roles:
@@ -1146,17 +1171,20 @@ elif mode == "5":
             role_scores.append((role, score))
             role_details[role] = detail_rows
         role_scores.sort(key=lambda x: x[1], reverse=True)
-        st.subheader(f"Role suitability — {player_row['Player']}")
+
+        st.subheader(_with_pos_filter(f"Role suitability — {player_row['Player']}"))
         fig = go.Figure([go.Bar(
             x=[s for _, s in role_scores],
             y=[r for r, _ in role_scores],
             orientation='h',
-            marker=dict(color=[sample_colorscale('Blues', [0.2+0.8*i/len(role_scores)])[0] for i in range(len(role_scores))],
-                        line=dict(color='#333', width=1)),
+            marker=dict(
+                color=[sample_colorscale('Blues', [0.2+0.8*i/len(role_scores)])[0] for i in range(len(role_scores))],
+                line=dict(color='#333', width=1)
+            ),
             text=[f"{s:.1f}" for _, s in role_scores], textposition='inside', insidetextanchor="middle"
         )])
         fig.update_layout(
-            title=dict(text=f"Role suitability — {player_row['Player']}", font=dict(color="#000", family=FONT_FAMILY)),
+            title=dict(text=_with_pos_filter(f"Role suitability — {player_row['Player']}"), font=dict(color="#000", family=FONT_FAMILY)),
             plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
             xaxis=dict(title="Suitability (0–100)", range=[0,100], color="#000", tickfont=dict(color="#000"), linecolor="#000"),
             yaxis=dict(autorange='reversed', color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -1165,6 +1193,7 @@ elif mode == "5":
         )
         apply_hover_style(fig)
         st.plotly_chart(fig, use_container_width=True, theme=None)
+
         role_pick = st.selectbox("View stat details for role", [r for r,_ in role_scores])
         det = role_details.get(role_pick, [])
         if det:
@@ -1192,32 +1221,6 @@ elif mode == "8":
             "Download pizza (dark, no toppings) PNG",
             data=fig_to_png_bytes_matplotlib(fig),
             file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_dark_notoppings.png",
-            mime="image/png"
-        )
-
-elif mode == "9":
-    if player_row is None or arch_choice is None:
-        st.info("Pick a player and archetype in the sidebar.")
-    else:
-        role_name = arch_choice
-        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=True, toppings=True, show_role_score=True)
-        st.download_button(
-            "Download pizza (light, toppings) PNG",
-            data=fig_to_png_bytes_matplotlib(fig),
-            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_light_toppings.png",
-            mime="image/png"
-        )
-
-elif mode == "10":
-    if player_row is None or arch_choice is None:
-        st.info("Pick a player and archetype in the sidebar.")
-    else:
-        role_name = arch_choice
-        fig = show_pizza(player_row, stat_cols_for_arch, df, role_name, lightmode=True, toppings=False, show_role_score=False)
-        st.download_button(
-            "Download pizza (light, no toppings) PNG",
-            data=fig_to_png_bytes_matplotlib(fig),
-            file_name=f"pizza_{player_row['Player'].replace(' ','_')}_{role_name.replace(' ','_')}_light_notoppings.png",
             mime="image/png"
         )
 
@@ -1296,7 +1299,7 @@ elif mode == "12":
         ])
 
         fig.update_layout(
-            title=dict(text=f"{x_pick} vs {y_pick} — scatter", font=dict(color="#000", family=FONT_FAMILY)),
+            title=dict(text=_with_pos_filter(f"{x_pick} vs {y_pick} — scatter"), font=dict(color="#000", family=FONT_FAMILY)),
             xaxis=dict(title=x_pick, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
             yaxis=dict(title=y_pick, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
             plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG, height=800,
@@ -1355,7 +1358,7 @@ elif mode == "13":
     ])
 
     fig.update_layout(
-        title=dict(text=f"{role_x} vs {role_y} — role suitability", font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"{role_x} vs {role_y} — role suitability"), font=dict(color="#000", family=FONT_FAMILY)),
         xaxis=dict(title=role_x, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
         yaxis=dict(title=role_y, gridcolor=POSTER_BG, zeroline=False, linecolor='#000', color="#000", tickfont=dict(color="#000")),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG, height=800,
