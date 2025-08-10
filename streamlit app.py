@@ -61,17 +61,31 @@ font_bold   = _fontprops_or_fallback(GABARITO_BOLD_PATH)
 FONT_FAMILY = "Gabarito, DejaVu Sans, Arial, sans-serif"
 mpl.rcParams["font.family"] = ["Gabarito", "DejaVu Sans", "Arial", "sans-serif"]
 
-st.markdown(
-    """
-    <link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;700&display=swap" rel="stylesheet">
-    <style>
-      :root, body, div, span, p, h1, h2, h3, h4, h5, h6, button, input, select, textarea {
-        font-family: 'Gabarito', 'DejaVu Sans', Arial, sans-serif !important;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;700&family=Material+Symbols+Outlined" rel="stylesheet">
+<style>
+  /* 1) Make Gabarito the default everywhere */
+  .stApp, .stApp * {
+    font-family: 'Gabarito', 'DejaVu Sans', Arial, sans-serif !important;
+  }
+
+  /* 2) Exception: the sidebar collapse icon — restore Material Symbols */
+  [data-testid="stSidebarCollapseButton"],
+  [data-testid="stSidebarCollapseButton"] * {
+    font-family: 'Material Symbols Outlined' !important;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    letter-spacing: normal !important;
+    line-height: 1 !important;
+  }
+  [data-testid="stExpandSidebarButton"],
+  [data-testid="stExpandSidebarButton"] * {
+    font-family: 'Material Symbols Outlined' !important;
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+    letter-spacing: normal !important;
+    line-height: 1 !important;
+  }
+</style>
+""", unsafe_allow_html=True)
 
 POSTER_BG = "#f1ffcd"
 HOVER_BG = "#f5f5dc"
@@ -599,7 +613,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
         value_bck_colors=slice_colors,
         blank_alpha=0.4,
         kwargs_slices=dict(edgecolor="#000000", zorder=2, linewidth=1),
-        kwargs_params=dict(color=param_color, fontsize=16, fontproperties=font_normal, va="center"),
+        kwargs_params=dict(color=param_color, fontsize=15, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
             color="#222222" if lightmode else "#fffff0",
             fontsize=12, fontproperties=font_normal, zorder=3,
