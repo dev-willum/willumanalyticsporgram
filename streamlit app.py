@@ -1058,15 +1058,28 @@ if mode == "1":
             except Exception:
                 st.caption("Hover in the top right of the image to download")
             lines = [f"{other_row['Player']} (Age: {int(other_row.get('Age',np.nan)) if pd.notnull(other_row.get('Age',np.nan)) else '?'} , Club: {other_row.get('Squad','?')}, Minutes: {other_row.get('Mins','?')})",
-                     f"Compared vs baseline: {player_row['Player']} — Role: {role_name}"]
+                    f"Compared vs baseline: {player_row['Player']} — Role: {role_name}"]
+
             for s in role_stats:
                 v = other_row.get(s, np.nan)
                 p = position_relative_percentile(df_for_calc, other_row, s)
                 if pd.notnull(v):
                     lines.append(f"{stat_display_names.get(s,s)}: {v:.2f} (Percentile: {p:.1f}%)")
-            txt = "\n".join(lines)
-            st.text_area("Copy summary", txt, height=220)
 
+            txt = "\n".join(lines)
+
+            # Read-only with a working copy button
+            st.markdown("**Copy summary**")
+            st.code(txt)  # Streamlit shows a copy-to-clipboard icon on code blocks
+
+            # Optional: also let users download as a .txt file
+            safe_base = re.sub(r"\W+", "_", f"{other_row['Player']}_vs_{player_row['Player']}").strip("_")
+            st.download_button(
+                "Download summary (.txt)",
+                data=txt.encode("utf-8"),
+                file_name=f"summary_{safe_base}.txt",
+                mime="text/plain"
+            )
 elif mode == "2":
     if player_row is None or arch_choice is None:
         st.info("Pick a player and archetype in the sidebar.")
