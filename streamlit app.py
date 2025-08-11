@@ -103,7 +103,7 @@ pizza_plot_categories = {
     "Passing": ["compPass/90", "attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90","pAdjprogPasses/90","pAdjxAG/90"],
     "Defending": ["tackles/90", "Tkl+Int/90", "interceptions/90", "pAdjtacklesWon/90", "pAdjinterceptions/90", "clearances/90", "dribbledPast/90", "Blocked/90", "errors/90", "shotsBlocked/90", "passesBlocked/90", "tackleSuccessRate", "ballRecoveries/90", "midThirdTackles/90","pAdjclearances/90","pAdjshotsBlocked/90","pAdjtackles/90"],
     "Carrying": ["progCarries/90", "thirdCarries/90", "Carries/90", "takeOnsAtt/90", "Succ/90", "att3rdTouches/90", "fouled/90","pAdjprogCarries/90","pAdjtouches/90"],
-    "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh","pAdjxG/90"],
+    "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh","pAdjxG/90","Distance"],
     "Aerial": ["headersWon/90", "headersWon%"],
     "Ball Retention": ["touches/90", "Dispossessed/90", "Mis/90", "sPass%", "ballRecoveries/90"],
 }
@@ -127,6 +127,7 @@ stat_display_names = {
     "Blocked/90": "Blocks/90",
     "errors/90": "Errors/90",
     "Mis/90": "Miscontrols/90",
+    "Distance": "Average Shot Distance (M)",
     "passesBlocked/90": "Passes Blocked/90",
     "progCarries/90": "Progressive Carries/90",
     "thirdCarries/90": "Final Third Carries/90",
@@ -553,6 +554,94 @@ def find_player_row(df, name_query):
     return None
 
 # =================
+# FAST/CACHED PERCENTILES + ROLE SCORES
+# =================
+
+@st.cache_data
+def _compute_percentiles_table(
+    dfin: pd.DataFrame,
+    selected_stats: list[str],
+    baseline: str = "positional",   # "positional" or "global"
+) -> pd.DataFrame:
+    """
+    Fast, cached percentiles.
+    - global: rank vs everyone.
+    - positional: rank within each position token (CB, DM, etc). For multi-pos players, average across tokens.
+    Returns columns pct_<stat>.
+    """
+    if not selected_stats or dfin.empty:
+        return pd.DataFrame(index=dfin.index)
+
+    df = dfin.copy()
+    for s in selected_stats:
+        df[s] = pd.to_numeric(df[s], errors="coerce")
+
+    pct_cols = [f"pct_{s}" for s in selected_stats]
+
+    if baseline == "global":
+        out = df[selected_stats].rank(pct=True).mul(100.0)
+        out.columns = pct_cols
+        return out.reindex(df.index)
+
+    # positional baseline
+    ex = df[selected_stats + ["Pos"]].copy()
+    ex["PosToken"] = ex["Pos"].fillna("").astype(str).str.split(",")
+    ex = ex.explode("PosToken")
+    ex["PosToken"] = ex["PosToken"].str.strip()
+    ex = ex[ex["PosToken"] != ""]
+
+    if ex.empty:
+        out = df[selected_stats].rank(pct=True).mul(100.0)
+        out.columns = pct_cols
+        return out.reindex(df.index)
+
+    ranked = ex.groupby("PosToken")[selected_stats].transform(lambda g: g.rank(pct=True) * 100.0)
+    ranked.columns = pct_cols
+    ex[pct_cols] = ranked
+
+    # average across a player's position tokens (explode preserves original index)
+    out = ex.groupby(level=0)[pct_cols].mean()
+
+    # fill anyone without a token using global ranks
+    if len(out) < len(df):
+        global_pct = df[selected_stats].rank(pct=True).mul(100.0)
+        global_pct.columns = pct_cols
+        out = global_pct.combine_first(out)
+
+    return out.reindex(df.index)
+
+@st.cache_data
+def precompute_role_scores(df_in: pd.DataFrame) -> pd.DataFrame:
+    """
+    Vectorized + cached role scores for EVERY role in `position_weights`.
+    Uses positional percentiles under the hood (same as your original intent).
+    Returns a DataFrame with one column per role.
+    """
+    needed_stats = sorted({s for w in position_weights.values() for s in w})
+    pct = _compute_percentiles_table(df_in, needed_stats, baseline="positional")  # cached
+
+    scores = {}
+    for role, weights in position_weights.items():
+        cols = [f"pct_{s}" for s in weights if f"pct_{s}" in pct.columns]
+        if not cols:
+            scores[role] = np.nan
+            continue
+
+        W = np.array([float(weights[s]) for s in weights if f"pct_{s}" in pct.columns], dtype=float)
+        M = pct[cols].to_numpy(dtype=float)
+
+        mask = ~np.isnan(M)
+        num = np.nansum(M * W, axis=1)
+        den = np.nansum(mask * W, axis=1)
+        role_score = np.divide(num, den, out=np.full(num.shape, np.nan), where=den > 0)
+
+        adj_fn = position_adjustments.get(role, lambda x: x)
+        role_score = np.vectorize(adj_fn)(role_score)
+        scores[role] = np.clip(role_score, 0, 100)
+
+    return pd.DataFrame(scores, index=df_in.index)
+
+# =================
 # PLOT FUNCTIONS
 # =================
 
@@ -639,7 +728,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  color=header_color, fontproperties=font_normal)
         suffix = _positions_suffix()
         fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}{suffix}",
-                ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
+                 ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.01, "willumanalytics",
                  ha='center', va='bottom', fontsize=9, color=("#666" if lightmode else "#CCC"),
                  fontproperties=font_normal, alpha=0.85)
@@ -662,8 +751,10 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
 
 
 def plot_role_leaderboard(df_filtered, role_name, role_stats):
+    # Fast path via precomputed scores
+    role_scores_df = precompute_role_scores(df_filtered)
     dfc = df_filtered.copy()
-    dfc['RoleScore'] = [calculate_role_score(row, role_stats, dfc, role_name) for _, row in dfc.iterrows()]
+    dfc['RoleScore'] = role_scores_df[role_name]
     top = dfc.nlargest(10, 'RoleScore').reset_index(drop=True)
 
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
@@ -820,45 +911,8 @@ def style_scatter_axes(ax, title_text):
         spine.set_color("#000")
         spine.set_linewidth(1)
 
-# ===== Modified: support positional vs global percentiles (Mode 14 will use global by default) =====
-def _compute_percentiles_table(dfin: pd.DataFrame, selected_stats: list[str], baseline: str = "positional") -> pd.DataFrame:
-    """
-    For each player in dfin, compute percentiles for selected_stats.
-    baseline: "positional" (vs same-position players) or "global" (vs all players in dfin)
-    Returns a DataFrame with columns pct_<stat>.
-    """
-    if not selected_stats or dfin.empty:
-        return pd.DataFrame(index=dfin.index)
-
-    pct_records = []
-    # Precompute global distributions once per stat (for speed)
-    global_distributions = {}
-    if baseline == "global":
-        for s in selected_stats:
-            if s in dfin.columns:
-                global_distributions[s] = dfin[s].replace([np.inf, -np.inf], np.nan).dropna()
-
-    for idx, row in dfin.iterrows():
-        rec = {}
-        for s in selected_stats:
-            if s not in dfin.columns:
-                rec[f"pct_{s}"] = np.nan
-                continue
-
-            if baseline == "global":
-                stat_vals = global_distributions.get(s, pd.Series(dtype=float))
-                val = row.get(s, np.nan)
-                if pd.isna(val) or stat_vals.empty:
-                    rec[f"pct_{s}"] = np.nan
-                else:
-                    rec[f"pct_{s}"] = round(stats.percentileofscore(stat_vals, val, kind='mean'), 2)
-            else:
-                rec[f"pct_{s}"] = position_relative_percentile(dfin, row, s)
-        pct_records.append(rec)
-
-    pct_df = pd.DataFrame(pct_records, index=dfin.index)
-    return pct_df
-
+# NOTE: replaced with cached version above
+# def _compute_percentiles_table(...): ...
 
 def pizza_fig_to_array(fig, dpi=220):
     buf = BytesIO()
@@ -928,10 +982,13 @@ def build_pizza_figure(
 
 
 def build_role_matrix_axes(ax, df, player_row, role_x, role_y):
-    ax.set_facecolor(POSTER_BG)
+    # Fast: use cached role scores
+    role_scores_df = precompute_role_scores(df)
     dfx = df.copy()
-    dfx['RoleScore_X'] = [calculate_role_score(r, archetype_params_full[role_x], dfx, role_x) for _, r in dfx.iterrows()]
-    dfx['RoleScore_Y'] = [calculate_role_score(r, archetype_params_full[role_y], dfx, role_y) for _, r in dfx.iterrows()]
+    dfx['RoleScore_X'] = role_scores_df[role_x]
+    dfx['RoleScore_Y'] = role_scores_df[role_y]
+
+    ax.set_facecolor(POSTER_BG)
     ax.scatter(dfx['RoleScore_X'], dfx['RoleScore_Y'], s=10, edgecolor="#333", linewidth=0.6, alpha=0.85, color="#1f77b4")
     me = dfx[dfx['Player'] == player_row['Player']]
     if not me.empty:
@@ -1187,7 +1244,47 @@ elif mode == "4":
     role_name = st.selectbox("Role", list(position_weights.keys()))
     role_stats = list(position_weights[role_name].keys())
     df_role = league_filter_ui(df)
-    top, fig = plot_role_leaderboard(df_role, role_name, role_stats)
+    # FAST: cached role scores
+    role_scores_df = precompute_role_scores(df_role)
+    dfc = df_role.copy()
+    dfc['RoleScore'] = role_scores_df[role_name]
+    top = dfc.nlargest(10, 'RoleScore').reset_index(drop=True)
+
+    # reuse existing plot function with dfc subset
+    pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
+                    "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
+    bar_colors = pastel_blues[-len(top):][::-1]
+    def lum(c):
+        r,g,b = [x*255 for x in mcolors.hex2color(c)]
+        return 0.299*r + 0.587*g + 0.114*b
+    bar_text_colors = ['white' if lum(c) < 150 else '#222' for c in bar_colors]
+    labels = [f"{row['Player']} • {row['RoleScore']:.1f} • {int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • {row.get('Squad','?')} • {int(row.get('Mins',0)):,} mins" for _, row in top.iterrows()]
+    fig = go.Figure([
+        go.Bar(
+            x=top['RoleScore'],
+            y=[f"#{i+1}" for i in range(len(top))],
+            orientation='h',
+            text=labels,
+            textposition='inside',
+            insidetextanchor='middle',
+            marker=dict(color=bar_colors, line=dict(color='#333', width=1)),
+            textfont=dict(color=bar_text_colors, size=13, family=FONT_FAMILY),
+            customdata=top.index.values,
+            hovertext=[f"{row['Player']} ({row['Squad']})" for _, row in top.iterrows()],
+            hoverinfo="text"
+        )
+    ])
+    fig.update_layout(
+        title=dict(text=_with_pos_filter(f"Top {role_name}s"), font=dict(color="#000", family=FONT_FAMILY)),
+        plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
+        xaxis=dict(title='Role Suitability Score (0–100)', range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+        yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+        margin=dict(l=120, r=40, t=60, b=40),
+        height=600, width=None,
+    )
+    apply_hover_style(fig)
+    st.plotly_chart(fig, use_container_width=True, theme=None)
+
     csv = top[['Player','Age','Squad','Nation','Mins','RoleScore'] + role_stats].copy()
     csv['Role'] = role_name
     st.download_button("Download CSV", csv.to_csv(index=False).encode("utf-8"), file_name=f"top_{role_name.replace(' ','_')}.csv")
@@ -1216,18 +1313,24 @@ elif mode == "5":
         relevant_roles = list(dict.fromkeys(relevant_roles)) or list(archetype_params_full.keys())
 
         df_for_calc = df.copy()
+        role_scores_all = precompute_role_scores(df_for_calc)  # FAST
+        player_idx = player_row.name
+
         role_scores, role_details = [], {}
         for role in relevant_roles:
+            score = float(role_scores_all.loc[player_idx, role])
+            role_scores.append((role, score))
+
+            # keep the detailed stat breakdown
             stats_list = archetype_params_full.get(role, [])
-            score = calculate_role_score(player_row, stats_list, df_for_calc, role)
             detail_rows = []
             for s in stats_list:
                 val = player_row.get(s, np.nan)
                 if pd.notnull(val):
                     pctl = position_relative_percentile(df_for_calc, player_row, s)
                     detail_rows.append((stat_display_names.get(s,s), val, pctl))
-            role_scores.append((role, score))
             role_details[role] = detail_rows
+
         role_scores.sort(key=lambda x: x[1], reverse=True)
 
         st.subheader(_with_pos_filter(f"Role suitability — {player_row['Player']}"))
@@ -1427,8 +1530,10 @@ elif mode == "13":
     search_name = st.text_input("Search & highlight a player (optional)", key="role_scatter_search")
 
     dfc = df.copy()
-    dfc['RoleScore_X'] = [calculate_role_score(row, archetype_params_full[role_x], dfc, role_x) for _, row in dfc.iterrows()]
-    dfc['RoleScore_Y'] = [calculate_role_score(row, archetype_params_full[role_y], dfc, role_y) for _, row in dfc.iterrows()]
+    # FAST: cached role scores
+    role_scores_df = precompute_role_scores(dfc)
+    dfc['RoleScore_X'] = role_scores_df[role_x]
+    dfc['RoleScore_Y'] = role_scores_df[role_y]
 
     try:
         dfc['Age'] = pd.to_numeric(dfc['Age'], errors='coerce').astype('Int64')
@@ -1483,14 +1588,6 @@ elif mode == "14":
     # Optional league filter (uses your existing helper)
     df_league = league_filter_ui(df)
 
-    # Choose percentile baseline for this mode (default to global)
-    baseline_option = st.radio(
-        "Percentile baseline",
-        ["Global (all players)", "Positional (same-position only)"],
-        index=0, horizontal=True
-    )
-    baseline_key = "global" if baseline_option.startswith("Global") else "positional"
-
     # Available numeric stats (same rule as elsewhere)
     numeric_cols = [c for c in df_league.columns if pd.api.types.is_numeric_dtype(df_league[c]) and c not in ['Age', 'Mins']]
     if not numeric_cols:
@@ -1507,7 +1604,7 @@ elif mode == "14":
         if not selected_stats:
             st.info("Choose at least one stat to start filtering.")
         else:
-            st.markdown("**Minimum percentiles** (per stat):")
+            st.markdown("**Minimum percentiles (GLOBAL)** (per stat):")
 
             # One slider per selected stat
             cols = st.columns(min(5, len(selected_stats)))
@@ -1517,14 +1614,14 @@ elif mode == "14":
                     thresholds[s] = st.slider(
                         f"{display_names[s]}",
                         min_value=0, max_value=100, value=80, step=1,
-                        help=f"Players must meet or exceed this percentile (vs {'ALL players' if baseline_key=='global' else 'same-position players'})."
+                        help="Players must meet or exceed this percentile (vs ALL players, not position-group)."
                     )
 
             max_results = st.slider("Max players to show", 10, 200, 60, step=10)
 
-            # Compute percentiles table (GLOBAL by default for Mode 14)
+            # Compute percentiles table (GLOBAL baseline for Player Finder)
             with st.spinner("Computing percentiles..."):
-                pct_df = _compute_percentiles_table(df_league, selected_stats, baseline=baseline_key)
+                pct_df = _compute_percentiles_table(df_league, selected_stats, baseline="global")
 
             dfq = df_league.join(pct_df)
 
@@ -1557,24 +1654,16 @@ elif mode == "14":
                     margin-bottom: 12px;
                     box-shadow: 0 1px 2px rgba(0,0,0,0.05);
                 }
-
-                /* Make ALL text inside the card black */
-                .pf-card, .pf-card * {
-                    color: #000 !important;
-                }
-
+                .pf-card, .pf-card * { color: #000 !important; }
                 .pf-title { font-size: 1.05rem; font-weight: 700; margin-bottom: 4px; }
                 .pf-sub   { font-size: 0.9rem;  margin-bottom: 8px; }
                 .pf-stats { font-size: 0.9rem;  line-height: 1.35; }
-
                 .pf-statline {
                     display: flex;
                     justify-content: space-between;
                     border-bottom: 1px dashed #eee;
                     padding: 4px 0;
                 }
-
-                /* Remove the slight fade; keep black */
                 .pf-statname { opacity: 1 !important; }
                 .pf-statpct  { font-weight: 700; }
                 </style>
@@ -1597,14 +1686,26 @@ elif mode == "14":
                         pos   = r.get("Pos", "?")
                         name  = r.get("Player", "?")
 
-                        # Build stat lines
+                        # Build stat lines -> show value + percentile
                         lines_html = []
                         for s in selected_stats:
                             pct = r.get(f"pct_{s}", np.nan)
                             pct_txt = f"{pct:.1f}%" if pd.notnull(pct) else "—"
+                            val = r.get(s, np.nan)
+                            if pd.isna(val):
+                                val_txt = "—"
+                            else:
+                                # Format numbers: try integers if they look like counts, else 2dp
+                                try:
+                                    if float(val).is_integer():
+                                        val_txt = f"{int(val)}"
+                                    else:
+                                        val_txt = f"{float(val):.2f}"
+                                except Exception:
+                                    val_txt = str(val)
                             lines_html.append(
                                 f"<div class='pf-statline'><span class='pf-statname'>{stat_display_names.get(s, s)}</span>"
-                                f"<span class='pf-statpct'>{pct_txt}</span></div>"
+                                f"<span class='pf-statpct'>{val_txt} • {pct_txt}</span></div>"
                             )
 
                         st.markdown(
