@@ -130,7 +130,7 @@ pizza_plot_categories = {
     "Passing": ["compPass/90", "attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90","pAdjprogPasses/90","pAdjxAG/90"],
     "Defending": ["tackles/90", "Tkl+Int/90", "interceptions/90", "pAdjtacklesWon/90", "pAdjinterceptions/90", "clearances/90", "dribbledPast/90", "Blocked/90", "errors/90", "shotsBlocked/90", "passesBlocked/90", "tackleSuccessRate", "ballRecoveries/90", "midThirdTackles/90","pAdjclearances/90","pAdjshotsBlocked/90","pAdjtackles/90"],
     "Carrying": ["progCarries/90", "thirdCarries/90", "Carries/90", "takeOnsAtt/90", "Succ/90", "att3rdTouches/90", "fouled/90","pAdjprogCarries/90","pAdjtouches/90"],
-    "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh","pAdjxG/90"],
+    "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh","pAdjxG/90","Distance"],
     "Aerial": ["headersWon/90", "headersWon%"],
     "Ball Retention": ["touches/90", "Dispossessed/90", "Mis/90", "sPass%", "ballRecoveries/90"],
 }
