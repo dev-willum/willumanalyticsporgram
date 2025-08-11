@@ -63,31 +63,58 @@ font_bold   = _fontprops_or_fallback(GABARITO_BOLD_PATH)
 FONT_FAMILY = "Gabarito, DejaVu Sans, Arial, sans-serif"
 mpl.rcParams["font.family"] = ["Gabarito", "DejaVu Sans", "Arial", "sans-serif"]
 
-st.markdown("""
-<link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;700&family=Material+Symbols+Outlined" rel="stylesheet">
-<style>
-  /* 1) Make Gabarito the default everywhere */
-  .stApp, .stApp * {
-    font-family: 'Gabarito', 'DejaVu Sans', Arial, sans-serif !important;
-  }
 
-  /* 2) Exception: the sidebar collapse icon — restore Material Symbols */
-  [data-testid="stSidebarCollapseButton"],
-  [data-testid="stSidebarCollapseButton"] * {
-    font-family: 'Material Symbols Outlined' !important;
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    letter-spacing: normal !important;
-    line-height: 1 !important;
-  }
-  [data-testid="stExpandSidebarButton"],
-  [data-testid="stExpandSidebarButton"] * {
-    font-family: 'Material Symbols Outlined' !important;
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    letter-spacing: normal !important;
-    line-height: 1 !important;
-  }
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Gabarito:wght@400;700&family=Material+Symbols+Outlined');
+
+:root, body, .stApp { --app-font: 'Gabarito', 'DejaVu Sans', Arial, sans-serif; }
+
+.stApp *:not(.material-symbols-outlined):not([class*="material-symbols"]):not([data-testid="stIcon"]):not(.stIconMaterial):not([data-testid="stIconMaterial"]) {
+  font-family: var(--app-font) !important;
+}
+
+.material-symbols-outlined,
+[class*="material-symbols"],
+[data-testid="stIcon"],
+[data-testid="stIcon"] *,
+.stIconMaterial,
+.stIconMaterial *,
+[data-testid="stIconMaterial"],
+[data-testid="stIconMaterial"] * {
+  font-family: 'Material Symbols Outlined' !important;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  letter-spacing: normal !important;
+  line-height: 1 !important;
+}
+
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapseButton"] *,
+[data-testid="stExpandSidebarButton"],
+[data-testid="stExpandSidebarButton"] * {
+  font-family: 'Material Symbols Outlined' !important;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  letter-spacing: normal !important;
+  line-height: 1 !important;
+}
+
+[data-testid="stExpander"] summary {
+  font-family: var(--app-font) !important;
+}
+[data-testid="stExpander"] summary::-webkit-details-marker { display: none; }
+[data-testid="stExpander"] summary::marker { content: ""; }
+
+.stButton>button {
+  font-family: var(--app-font) !important;
+  line-height: normal !important;
+  pointer-events: auto !important;
+}
 </style>
 """, unsafe_allow_html=True)
+
+
+
+
 
 POSTER_BG = "#f1ffcd"
 HOVER_BG = "#f5f5dc"
@@ -1300,6 +1327,7 @@ MODE_ITEMS = [
     ("Stat Scatter", "12"),
     ("Role Matrix", "13"),
     ("Player Finder", "14"),
+    ("Glossary / Help", "15"),
 
 ]
 dot_nav(MODE_ITEMS, default_key="1")
@@ -1843,3 +1871,120 @@ elif mode == "14":
                             unsafe_allow_html=True
                         )
                     shown += 1
+elif mode == "15":
+    st.subheader("Glossary & Help")
+
+    st.markdown("""
+**Welcome!** This app lets you explore footballer performance via role-based scoring, percentiles, and visualizations.
+Use the sidebar to filter your dataset (database, positions, minutes) and to pick players/archetypes.  
+Below is a quick reference of **sidebar options** and **all modes**.
+""")
+
+    with st.expander("Sidebar Options", expanded=True):
+        st.markdown("""
+- **Database**  
+  Choose which CSV(s) to load (`BigDB_ALL.csv`, `BigDB.csv`, or **Both**).
+
+- **Filter by position(s)** *(defaults: DF, MF, FW)*  
+  Filters your dataset to broad groups. Each group includes common sub-roles (e.g., DF includes CB/LB/RB/WB etc.).  
+  This default excludes GKs to avoid inflated shooting percentiles for them.
+
+- **Minimum minutes**  
+  Drops players below this minutes threshold.
+
+- **Player (dropdown) / Or type a player name**  
+  Pick the player you want to analyze. Typing will fuzzy-match if needed.
+
+- **Archetype**  
+  Choose a predefined role (e.g., “CB - Ball-Playing”) or a category pizza (e.g., “Shooting Pizza”).  
+  Archetype lists define which stats are used in that mode.
+
+- **League filter** *(shown inside some modes)*  
+  Lets you limit to selected leagues before computing leaders/percentiles.
+        """)
+
+    st.markdown("### Modes")
+
+    with st.expander("Mode 1 — Similar"):
+        st.markdown("""
+Find the **most similar players** to your selected player for a chosen archetype.  
+- Uses cosine similarity on the archetype’s stat set (standardized).  
+- The radar that follows shows **positional percentiles** for the two players.
+        """)
+
+    with st.expander("Mode 2 — Percentiles"):
+        st.markdown("""
+Horizontal bar chart of your player’s **positional percentiles** for the chosen archetype’s stats.
+You can download the chart (PNG) and the data (CSV).
+        """)
+
+    with st.expander("Mode 3 — Pizza"):
+        st.markdown("""
+Radar (pizza) chart of **positional percentiles** for the chosen archetype.  
+- The **Role Score** badge uses cached positional percentile–based scoring when available.  
+- Style options: Light/Dark, toppings on/off.  
+- Download as PNG.
+        """)
+
+    with st.expander("Mode 4 — Role Leaders"):
+        st.markdown("""
+Top 10 players by **Role Score** for a selected role.  
+- Uses **cached** positional percentile–based scores for speed.  
+- Download the leaderboard as CSV.
+        """)
+
+    with st.expander("Mode 5 — Best Roles"):
+        st.markdown("""
+Ranks **all roles** (relevant to the player’s positions) by suitability for the selected player.  
+- Uses cached Role Scores where available (falls back to on-the-fly if needed).  
+- Detail table shows **player values** and **positional percentiles** per stat.
+        """)
+
+    with st.expander("Mode 6 — Stat Leaders"):
+        st.markdown("""
+Top 10 for a **single stat** of your choice (no percentiles here).  
+Great for raw-volume/specific metric leaderboards.
+        """)
+
+    with st.expander("Mode 7 — Custom Archetype"):
+        st.markdown("""
+Build your own archetype (up to 10 stats + custom weights).  
+- Scores are computed using **positional percentiles**.  
+- Shows a Top 10 leaderboard + a tool to **score any single player**.  
+- You can download the leaderboard CSV.
+        """)
+
+    with st.expander("Mode 12 — Stat Scatter"):
+        st.markdown("""
+Scatter plot for any **two numeric stats**.  
+Search to highlight a player. Labels auto-show for extreme values.
+        """)
+
+    with st.expander("Mode 13 — Role Matrix"):
+        st.markdown("""
+Scatter plot with **two Role Scores** as axes (e.g., “Winger - Inverted” vs “ST - Target Man”).  
+- Uses **cached** scores for speed when possible.  
+- Search to highlight a player.
+        """)
+
+    with st.expander("Mode 14 — Player Finder"):
+        st.markdown("""
+Filter the dataset by **minimum percentiles** on up to 10 stats.  
+- Uses **GLOBAL percentiles** (across the filtered dataset) — not positional.  
+- Cards show each stat’s **actual value** and its **(percentile)**.  
+- Results are sorted by the **average** of the selected global percentiles.
+        """)
+
+    st.markdown("---")
+    with st.expander("Notes on Percentiles & Scores", expanded=False):
+        st.markdown("""
+- **Positional vs Global percentiles**  
+  - Most modes use **positional percentiles** (compare only to players with overlapping positions).  
+  - **Player Finder** (Mode 14) uses **global percentiles** (compare to everyone after filters).
+- **Role Scores**  
+  - Weighted averages of percentiles per role; some roles apply small adjustments.  
+  - Cached and re-used across modes for performance; recalculated when dataset filters change.
+- **Category Pizzas (e.g., Shooting, Passing)**  
+  - Percentiles are positional in the charts.  
+  - Internally, category-level scores are cached from positional percentiles for speed.
+        """)
