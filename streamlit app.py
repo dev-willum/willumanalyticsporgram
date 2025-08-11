@@ -212,7 +212,8 @@ stat_display_names = {
     "pAdjclearances/90" : "Possession Adjusted Clearances/90",
     "pAdjshotsBlocked/90" : "Possession Adjusted Shots Blocked/90",
     "pAdjprogCarries/90" : "Possession Adjusted Progressive Carries/90",
-    "pAdjtackles/90" : "Possession Adjusted Tackles/90"
+    "pAdjtackles/90" : "Possession Adjusted Tackles/90",
+    "Distance" : "Average Shot Distance (M)"
 }
 
 position_weights = {
