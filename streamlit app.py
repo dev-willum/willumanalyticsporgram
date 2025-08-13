@@ -1329,8 +1329,9 @@ MODE_ITEMS = [
     ("Role Matrix", "13"),
     ("Player Finder", "14"),
     ("Glossary / Help", "15"),
-
+    ("Head-to-Head Radar", "16"),
 ]
+
 dot_nav(MODE_ITEMS, default_key="1")
 mode = st.session_state["mode"]
 
@@ -1989,3 +1990,57 @@ Filter the dataset by **minimum percentiles** on up to 10 stats.
   - Percentiles are positional in the charts.  
   - Internally, category-level scores are cached from positional percentiles for speed.
         """)
+elif mode == "16":
+    if arch_choice is None:
+        st.info("Pick an archetype in the sidebar.")
+    else:
+        role_name = arch_choice
+        role_stats = stat_cols_for_arch
+
+        df_for_calc = df.copy()
+        players = df_for_calc['Player'].dropna().unique().tolist()
+
+        default_a = player_row['Player'] if player_row is not None else (players[0] if players else None)
+        pA_name = st.selectbox("Player A", players, index=(players.index(default_a) if default_a in players else 0) if players else 0)
+        pB_name = st.selectbox("Player B", players, index=(players.index(default_a) if default_a in players else 0) if players else 0, key="h2h_b")
+
+        pA = df_for_calc[df_for_calc['Player'] == pA_name].iloc[0] if pA_name else None
+        pB = df_for_calc[df_for_calc['Player'] == pB_name].iloc[0] if pB_name else None
+
+        if pA is None or pB is None or pA_name == pB_name:
+            st.info("Pick two different players.")
+        else:
+            radar_fig = plot_radar_percentiles(pA, pB, role_stats, df_for_calc, role_name)
+            try:
+                png_bytes = fig_to_png_bytes_plotly(radar_fig)
+                st.download_button(
+                    "Download radar (PNG)",
+                    data=png_bytes,
+                    file_name=f"radar_{pA_name.replace(' ','_')}_vs_{pB_name.replace(' ','_')}_{role_name.replace(' ','_')}.png",
+                    mime="image/png",
+                )
+            except Exception:
+                pass
+
+            rows = []
+            for s in role_stats:
+                vA = pA.get(s, np.nan)
+                vB = pB.get(s, np.nan)
+                pA_pct = position_relative_percentile(df_for_calc, pA, s)
+                pB_pct = position_relative_percentile(df_for_calc, pB, s)
+                rows.append({
+                    "Stat": stat_display_names.get(s, s),
+                    f"{pA_name} (val)": vA,
+                    f"{pA_name} (pct)": pA_pct,
+                    f"{pB_name} (val)": vB,
+                    f"{pB_name} (pct)": pB_pct
+                })
+            cmp_df = pd.DataFrame(rows)
+            st.dataframe(cmp_df)
+
+            st.download_button(
+                "Download comparison (CSV)",
+                data=cmp_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"h2h_{pA_name.replace(' ','_')}_vs_{pB_name.replace(' ','_')}_{role_name.replace(' ','_')}.csv",
+                mime="text/csv"
+            )
