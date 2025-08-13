@@ -1956,25 +1956,31 @@ Build your own archetype (up to 10 stats + custom weights).
 - You can download the leaderboard CSV.
         """)
 
-    with st.expander("Mode 12 — Stat Scatter"):
+    with st.expander("Mode 8 — Stat Scatter"):
         st.markdown("""
 Scatter plot for any **two numeric stats**.  
 Search to highlight a player. Labels auto-show for extreme values.
         """)
 
-    with st.expander("Mode 13 — Role Matrix"):
+    with st.expander("Mode 9 — Role Matrix"):
         st.markdown("""
 Scatter plot with **two Role Scores** as axes (e.g., “Winger - Inverted” vs “ST - Target Man”).  
 - Uses **cached** scores for speed when possible.  
 - Search to highlight a player.
         """)
 
-    with st.expander("Mode 14 — Player Finder"):
+    with st.expander("Mode 10 — Player Finder"):
         st.markdown("""
 Filter the dataset by **minimum percentiles** on up to 10 stats.  
 - Uses **GLOBAL percentiles** (across the filtered dataset) — not positional.  
 - Cards show each stat’s **actual value** and its **(percentile)**.  
 - Results are sorted by the **average** of the selected global percentiles.
+        """)
+    with st.expander("Mode 11 — Radar Plot"):
+        st.markdown("""
+Creates Comparison Radar Plots between two players for the selected archetype.  
+- Values shown in percentiles 
+- Click on the key in the top corner to hide one of the players.  
         """)
 
     st.markdown("---")
@@ -1982,7 +1988,7 @@ Filter the dataset by **minimum percentiles** on up to 10 stats.
         st.markdown("""
 - **Positional vs Global percentiles**  
   - Most modes use **positional percentiles** (compare only to players with overlapping positions).  
-  - **Player Finder** (Mode 14) uses **global percentiles** (compare to everyone after filters).
+  - **Player Finder** (Mode 10) uses **global percentiles** (compare to everyone after filters).
 - **Role Scores**  
   - Weighted averages of percentiles per role; some roles apply small adjustments.  
   - Cached and re-used across modes for performance; recalculated when dataset filters change.
@@ -1990,6 +1996,8 @@ Filter the dataset by **minimum percentiles** on up to 10 stats.
   - Percentiles are positional in the charts.  
   - Internally, category-level scores are cached from positional percentiles for speed.
         """)
+
+    
 elif mode == "16":
     if arch_choice is None:
         st.info("Pick an archetype in the sidebar.")
