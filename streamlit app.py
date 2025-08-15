@@ -1298,11 +1298,36 @@ st.session_state["pos_filter"] = pos_sel[:]
 min_minutes = st.sidebar.number_input("Minimum minutes", min_value=0, max_value=10000, value=900, step=30)
 df = filter_by_minutes(df, min_minutes)
 
+# NEW/CHANGED — keep dropdown selection stable across filter changes
 player_list = df['Player'].dropna().unique().tolist()
-player_name = st.sidebar.selectbox("Player (dropdown)", player_list) if len(player_list) else None
-typed_query = st.sidebar.text_input("Or type a player name")
+
+if len(player_list):
+    prev_choice = st.session_state.get("player_dropdown")
+    default_index = player_list.index(prev_choice) if prev_choice in player_list else 0
+    player_name = st.sidebar.selectbox(
+        "Player (dropdown)",
+        player_list,
+        index=default_index,
+        key="player_dropdown"  # <- stateful
+    )
+else:
+    player_name = None
+
+# NEW/CHANGED — make typed name stateful and use it to auto-fill scatter searches
+typed_query = st.sidebar.text_input("Or type a player name", key="typed_query")
+if typed_query:
+    # propagate the typed name to both scatter search boxes when it changes
+    if st.session_state.get("_last_typed_query") != typed_query:
+        st.session_state["stat_scatter_search"] = typed_query
+        st.session_state["role_scatter_search"] = typed_query
+        st.session_state["_last_typed_query"] = typed_query
+
 typed_row = find_player_row(df, typed_query) if typed_query else None
-player_row = typed_row if typed_row is not None else (df[df['Player'] == player_name].iloc[0] if player_name else None)
+player_row = (
+    typed_row if typed_row is not None
+    else (df[df['Player'] == player_name].iloc[0] if player_name else None)
+)
+
 
 arch_keys = list(archetype_params_full.keys())
 arch_choice = st.sidebar.selectbox("Archetype", arch_keys) if arch_keys else None
@@ -1636,7 +1661,8 @@ elif mode == "12":
     if len(numeric_cols) >= 2:
         x_pick = st.selectbox("X-axis stat", [display_names[c] for c in numeric_cols], index=0)
         y_pick = st.selectbox("Y-axis stat", [display_names[c] for c in numeric_cols], index=1)
-        search_name = st.text_input("Search & highlight a player (optional)")
+        search_name = st.text_input("Search & highlight a player (optional)", key="stat_scatter_search")
+
 
         x_col = [c for c in numeric_cols if display_names[c] == x_pick][0]
         y_col = [c for c in numeric_cols if display_names[c] == y_pick][0]
