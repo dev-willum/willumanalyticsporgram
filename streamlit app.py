@@ -513,6 +513,44 @@ def break_label(label, max_len=24):
                 current += (" " if current else "") + w
         if current: lines.append(current)
         return "\n".join(lines)
+    
+# ---- Season folder helpers ----
+def _list_season_dirs(root: str = "") -> list[str]:
+    """
+    Return season-like subfolders under working dir, e.g. ['25_26','24_25'] (sorted newest first).
+    """
+    root = root or os.getcwd()
+    try:
+        seasons = [
+            d for d in os.listdir(root)
+            if os.path.isdir(os.path.join(root, d)) and re.fullmatch(r"\d{2}_\d{2}", d)
+        ]
+        seasons.sort(reverse=True)  # e.g., '25_26' before '24_25'
+        return seasons
+    except Exception:
+        return []
+
+def _season_label(folder_name: str) -> str:
+    """
+    Convert '25_26' -> '25/26 DBs' for nicer display.
+    """
+    if re.fullmatch(r"\d{2}_\d{2}", folder_name):
+        return f"{folder_name[:2]}/{folder_name[3:]} DBs"
+    return folder_name
+
+def _season_choice_map(root: str = "") -> tuple[list[str], dict[str, str]]:
+    """
+    Build display choices + map display -> absolute folder path (or "" for current folder).
+    """
+    root = root or os.getcwd()
+    season_dirs = _list_season_dirs(root)
+    if not season_dirs:
+        # fallback to just the working directory
+        return ["Current Folder"], {"Current Folder": ""}
+
+    choices = [_season_label(s) for s in season_dirs]
+    mapping = { _season_label(s): os.path.join(root, s) for s in season_dirs }
+    return choices, mapping
 
 def league_strip_prefix(comp):
     for prefix in ('eng ', 'it ', 'es ', 'de ', 'fr '):
@@ -1277,14 +1315,41 @@ def render_player_dashboard(player_row, df):
 st.sidebar.header("Data & Filters")
 
 # No front-end filepath control — use working directory like before.
-BASE = ""  # empty string -> look for CSVs relative to current working directory
+# Root is working dir; season folders live here as ./24_25, ./25_26, ...
+DATA_ROOT = ""  # keep empty to use current working directory
 
+# 1) Pick season folder (shown as "25/26 DBs" etc.)
+_season_choices, _season_map = _season_choice_map(DATA_ROOT)
+
+# Prefer the newest (e.g., 25/26) if present
+_default_season_idx = 0
+try:
+    newest_label = _season_label("25_26")
+    if newest_label in _season_choices:
+        _default_season_idx = _season_choices.index(newest_label)
+except Exception:
+    pass
+
+season_choice_label = st.sidebar.selectbox(
+    "Season",
+    _season_choices,
+    index=_default_season_idx,
+    key="season_select",
+    help="Select which season's folder to use (working dir / NN_NN)."
+)
+BASE = _season_map.get(season_choice_label, "")
+
+# 2) Pick database(s) inside that season folder
 db_choice = st.sidebar.selectbox(
     "Database",
     ["BigDB_ALL.csv (Minor Leagues)", "BigDB.csv (Big 5 European Leagues)", "Both"],
-    index=2
+    index=2,
+    key="db_select"
 )
+
+# Load
 df = load_csvs(BASE, db_choice)
+
 
 st.sidebar.write("Available positions: GK, DF, MF, FW")
 
