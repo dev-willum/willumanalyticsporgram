@@ -777,18 +777,34 @@ def precompute_role_scores(df_in: pd.DataFrame) -> pd.DataFrame:
 # =================
 
 def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
-    # default: positional baseline
+    # raw values + percentiles (positional)
     vals = [player_row.get(s, np.nan) for s in stat_cols]
     percentiles = [
         position_relative_percentile(df, player_row, s) if np.isfinite(v) else 0
         for s, v in zip(stat_cols, vals)
     ]
     labels = [stat_display_names.get(s, s) for s in stat_cols]
+
+    # ---- NEW: richer hovertext with raw values ----
+    hover = []
+    for lbl, v, p in zip(labels, vals, percentiles):
+        try:
+            vtxt = f"{float(v):.2f}" if pd.notnull(v) else "—"
+        except Exception:
+            vtxt = "—"
+        hover.append(f"<b>{lbl}</b><br>Value: {vtxt}<br>Percentile: {p:.1f}%")
+
     bar = go.Bar(
-        x=percentiles, y=labels, orientation='h',
-        text=[f"{p:.1f}%" for p in percentiles], textposition="auto",
-        marker=dict(color=percentiles, colorscale="RdYlGn")
+        x=percentiles,
+        y=labels,
+        orientation='h',
+        text=[f"{p:.1f}%" for p in percentiles],
+        textposition="auto",
+        marker=dict(color=percentiles, colorscale="RdYlGn"),
+        hovertext=hover,          # NEW
+        hoverinfo="text"          # NEW
     )
+
     title = _with_pos_filter(
         f"{player_row['Player']} — {role_name}<br><sup>Percentiles vs same-position players</sup>"
     )
@@ -803,8 +819,10 @@ def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
+
     df_out = pd.DataFrame({"Stat": labels, "Percentile": percentiles, "Value": vals})
     return fig, df_out
+
 
 
 def _player_pcts_global_then_positional(df_src: pd.DataFrame, player_row: pd.Series, stat_cols: list[str]) -> list[float]:
