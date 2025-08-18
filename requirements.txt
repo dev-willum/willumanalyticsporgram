@@ -10,3 +10,4 @@ Pillow
 requests
 kaleido
 json
+PIL
