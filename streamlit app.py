@@ -370,8 +370,15 @@ def apply_hover_style(fig):
     fig.update_layout(font=dict(family=FONT_FAMILY))
 
 def _positions_suffix() -> str:
+    parts = []
     pos = st.session_state.get("pos_filter", [])
-    return f" | Positions Filtered: {', '.join(pos)}" if pos else ""
+    if pos:
+        parts.append(f"Positions: {', '.join(pos)}")
+    max_age = st.session_state.get("max_age_filter", None)
+    if max_age is not None:
+        parts.append(f"Max Age ≤ {int(max_age)}")
+    return f" | {' • '.join(parts)}" if parts else ""
+
 
 def _with_pos_filter(title: str) -> str:
     return f"{title}{_positions_suffix()}"
@@ -1234,7 +1241,7 @@ def build_role_matrix_axes(ax, df, player_row, role_x, role_y):
     ax.set_xlim(0, 100); ax.set_ylim(0, 100)
     ax.set_xlabel(role_x); ax.set_ylabel(role_y)
     ax.grid(color="#d9e6a6", linewidth=1, alpha=1.0)
-    style_scatter_axes(ax, f"Role Matrix: {role_x} vs {role_y}")
+    style_scatter_axes(ax, _with_pos_filter(f"Role Matrix: {role_x} vs {role_y}"))
 
 
 def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_url=None):
@@ -1380,6 +1387,14 @@ st.session_state["pos_filter"] = pos_sel[:]
 
 min_minutes = st.sidebar.number_input("Minimum minutes", min_value=0, max_value=10000, value=900, step=30)
 df = filter_by_minutes(df, min_minutes)
+
+# NEW: Maximum age filter
+max_age = st.sidebar.number_input(
+    "Maximum age",
+    min_value=14, max_value=50, value=40, step=1,
+    key="max_age_filter"
+)
+df = df[pd.to_numeric(df['Age'], errors='coerce') <= max_age]
 
 # NEW/CHANGED — keep dropdown selection stable across filter changes
 player_list = df['Player'].dropna().unique().tolist()
