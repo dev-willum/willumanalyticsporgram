@@ -1,0 +1,10 @@
+{
+  "Goals Per Shot": {
+    "stats": [
+      "G/Sh"
+    ],
+    "weights": {
+      "G/Sh": 1.0
+    }
+  }
+}
