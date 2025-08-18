@@ -34,7 +34,6 @@ import streamlit as st
 from PIL import Image
 import requests
 
-import kaleido
 
 # =========================
 # ====== CONFIG & DATA ====
@@ -111,10 +110,6 @@ st.markdown("""
 }
 </style>
 """, unsafe_allow_html=True)
-
-
-
-
 
 POSTER_BG = "#f1ffcd"
 HOVER_BG = "#f5f5dc"
@@ -379,7 +374,6 @@ def _positions_suffix() -> str:
         parts.append(f"Max Age ≤ {int(max_age)}")
     return f" | {' • '.join(parts)}" if parts else ""
 
-
 def _with_pos_filter(title: str) -> str:
     return f"{title}{_positions_suffix()}"
 
@@ -520,7 +514,7 @@ def break_label(label, max_len=24):
                 current += (" " if current else "") + w
         if current: lines.append(current)
         return "\n".join(lines)
-    
+
 # ---- Season folder helpers ----
 def _list_season_dirs(root: str = "") -> list[str]:
     """
@@ -695,7 +689,6 @@ def _precompute_positional_percentiles(df: pd.DataFrame, stats_needed: tuple[str
 
     groups = dfx.groupby("PosSig").groups  # dict: possig -> index (Int64Index)
     for possig, idx in groups.items():
-        # IMPORTANT: don't do `if not idx` on an Index (ambiguous truth value)
         if len(idx) == 0:
             continue
         idx = pd.Index(idx)
@@ -868,8 +861,6 @@ def show_percentile_bar_chart(player_row, stat_cols, df, role_name):
     df_out = pd.DataFrame({"Stat": labels, "Percentile": percentiles, "Value": vals})
     return fig, df_out
 
-
-
 def _player_pcts_global_then_positional(df_src: pd.DataFrame, player_row: pd.Series, stat_cols: list[str]) -> list[float]:
     """Global first; if positions are filtered in UI, recalc positionally."""
     idx = player_row.name
@@ -891,7 +882,6 @@ def _player_pcts_global_then_positional(df_src: pd.DataFrame, player_row: pd.Ser
             p2.append(0 if pd.isna(player_row.get(s, np.nan)) else (float(vv) if pd.notnull(vv) else 0.0))
         pcts = p2
     return [float(np.clip(x, 0, 100)) for x in pcts]
-
 
 def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, toppings=True, show_role_score=False):
     raw_vals = [player_row.get(s, float('nan')) for s in stat_cols]
@@ -947,7 +937,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  color=header_color, fontproperties=font_normal)
         suffix = _positions_suffix()
         fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}{suffix}",
-                 ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
+            ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.01, "willumanalytics",
                  ha='center', va='bottom', fontsize=9, color=("#666" if lightmode else "#CCC"),
                  fontproperties=font_normal, alpha=0.85)
@@ -982,15 +972,20 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
     st.pyplot(fig, clear_figure=False)
     return fig
 
-
-def plot_role_leaderboard(df_filtered, role_name, role_stats):
-    # Use fast cached series
+def plot_role_leaderboard(df_display, role_name, role_stats, df_for_calc):
+    """
+    - Compute Role Scores on df_for_calc (pre–age filter)
+    - Reindex scores onto df_display (age-filtered) and rank within the visible set
+    """
     try:
-        dfc = df_filtered.copy()
-        dfc['RoleScore'] = compute_role_scores_cached(dfc, role_name)
+        scores_all = compute_role_scores_cached(df_for_calc, role_name)
     except Exception:
-        dfc = df_filtered.copy()
-        dfc['RoleScore'] = [calculate_role_score(row, role_stats, dfc, role_name) for _, row in dfc.iterrows()]
+        scores_all = pd.Series(index=df_for_calc.index, dtype=float)
+        for idx, row in df_for_calc.iterrows():
+            scores_all.loc[idx] = calculate_role_score(row, role_stats, df_for_calc, role_name)
+
+    dfc = df_display.copy()
+    dfc['RoleScore'] = scores_all.reindex(dfc.index)
 
     top = dfc.nlargest(10, 'RoleScore').reset_index(drop=True)
 
@@ -1031,7 +1026,6 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats):
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
 
-
 def show_top_players_by_stat(df, tidy_label, stat_col):
     top = df.nlargest(10, stat_col).reset_index(drop=True)
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
@@ -1064,7 +1058,6 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
-
 
 def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     X = df_filtered[stat_cols].fillna(0)
@@ -1112,7 +1105,6 @@ def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     pick = st.selectbox("Pick a player to compare on radar", top_players['Player'].tolist())
     return top_players[top_players['Player'] == pick].iloc[0] if pick else None
 
-
 def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_name):
     base_vals = [position_relative_percentile(df_filtered, base_row, s) for s in stat_cols]
     other_vals = [position_relative_percentile(df_filtered, other_row, s) for s in stat_cols]
@@ -1138,7 +1130,6 @@ def plot_radar_percentiles(base_row, other_row, stat_cols, df_filtered, role_nam
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return fig
 
-
 def style_scatter_axes(ax, title_text):
     ax.set_title(title_text, fontsize=14, pad=8, fontproperties=font_normal, color="#000")
     ax.tick_params(colors="#000", labelsize=10)
@@ -1155,7 +1146,6 @@ def pizza_fig_to_array(fig, dpi=220):
     buf.seek(0)
     img = Image.open(buf).convert("RGBA")
     return np.array(img)
-
 
 def build_pizza_figure(
     player_row, stat_cols, df, role_name,
@@ -1224,13 +1214,14 @@ def build_pizza_figure(
         )
     return fig
 
-
-def build_role_matrix_axes(ax, df, player_row, role_x, role_y):
+def build_role_matrix_axes(ax, df_display, df_calc, player_row, role_x, role_y):
     ax.set_facecolor(POSTER_BG)
 
-    dfx = df.copy()
-    dfx['RoleScore_X'] = compute_role_scores_cached(dfx, role_x)
-    dfx['RoleScore_Y'] = compute_role_scores_cached(dfx, role_y)
+    dfx = df_display.copy()
+    ser_x = compute_role_scores_cached(df_calc, role_x)
+    ser_y = compute_role_scores_cached(df_calc, role_y)
+    dfx['RoleScore_X'] = ser_x.reindex(dfx.index)
+    dfx['RoleScore_Y'] = ser_y.reindex(dfx.index)
 
     ax.scatter(dfx['RoleScore_X'], dfx['RoleScore_Y'], s=10, edgecolor="#333", linewidth=0.6, alpha=0.85, color="#1f77b4")
     me = dfx[dfx['Player'] == player_row['Player']]
@@ -1243,14 +1234,13 @@ def build_role_matrix_axes(ax, df, player_row, role_x, role_y):
     ax.grid(color="#d9e6a6", linewidth=1, alpha=1.0)
     style_scatter_axes(ax, _with_pos_filter(f"Role Matrix: {role_x} vs {role_y}"))
 
-
-def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_url=None):
-    central_fig   = build_pizza_figure(player_row, archetype_params_full[main_role], df, main_role, lightmode=True, toppings=True, show_role_score=True)
+def make_dashboard_poster(player_row, df_display, df_calc, main_role, role_x, role_y, headshot_url=None):
+    central_fig   = build_pizza_figure(player_row, archetype_params_full[main_role], df_calc, main_role, lightmode=True, toppings=True, show_role_score=True)
     central_img   = pizza_fig_to_array(central_fig, dpi=220)
     cats = ["Shooting", "Carrying", "Passing"]
     mini_imgs = []
     for c in cats:
-        mini_fig = build_pizza_figure(player_row, pizza_plot_categories.get(c, []), df, c, lightmode=True, toppings=False, show_role_score=False)
+        mini_fig = build_pizza_figure(player_row, pizza_plot_categories.get(c, []), df_calc, c, lightmode=True, toppings=False, show_role_score=False)
         mini_imgs.append(pizza_fig_to_array(mini_fig, dpi=220))
     fig = plt.figure(figsize=(12.5, 17), facecolor=POSTER_BG)
     gs = fig.add_gridspec(14, 12)
@@ -1281,12 +1271,11 @@ def make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_ur
         ax_m = fig.add_subplot(gs[2 + i*3 : 2 + i*3 + 3, 8:12]); ax_m.axis('off'); ax_m.imshow(img)
         ax_m.set_title(f"{title}:", fontsize=13, pad=6, fontproperties=font_normal, loc="left")
     ax_mat = fig.add_subplot(gs[9:14, 0:12])
-    build_role_matrix_axes(ax_mat, df, player_row, role_x, role_y)
+    build_role_matrix_axes(ax_mat, df_display, df_calc, player_row, role_x, role_y)
     fig.text(0.01, 0.01, "willumanalytics", fontsize=10, color="#777", fontproperties=font_normal)
     return fig
 
-
-def render_player_dashboard(player_row, df):
+def render_player_dashboard(player_row, df_display, df_calc):
     if player_row is None:
         st.info("Type or pick a player in the sidebar first.")
         return
@@ -1299,7 +1288,7 @@ def render_player_dashboard(player_row, df):
     role_x = st.selectbox("Matrix X role", arch_keys_local, index=default_x)
     role_y = st.selectbox("Matrix Y role", arch_keys_local, index=default_y)
     headshot_url = st.text_input("Optional headshot image URL (for header)", "")
-    fig = make_dashboard_poster(player_row, df, main_role, role_x, role_y, headshot_url or None)
+    fig = make_dashboard_poster(player_row, df_display, df_calc, main_role, role_x, role_y, headshot_url or None)
     st.pyplot(fig, clear_figure=False)
     upscale_dpi = st.slider("Download DPI (higher = larger PNG)", 200, 600, 360, step=20)
     buf = BytesIO()
@@ -1354,9 +1343,8 @@ db_choice = st.sidebar.selectbox(
     key="db_select"
 )
 
-# Load
+# Load the raw dataset for this season+database choice
 df = load_csvs(BASE, db_choice)
-
 
 st.sidebar.write("Available positions: GK, DF, MF, FW")
 
@@ -1372,29 +1360,36 @@ def _passes_group_selection(pos_str: str, selected_groups: list[str]) -> bool:
             return True
     return False
 
+# ---- Position filter
 pos_sel = st.sidebar.multiselect(
     "Filter by position(s) (optional)",
     ["GK", "DF", "MF", "FW"],
     default=st.session_state["pos_filter"]
 )
-
 if pos_sel:
     mask = df["Pos"].apply(lambda s: _passes_group_selection(s, pos_sel))
     df = df[mask]
-
-# keep the current choice in session (so it “sticks” after the first load)
 st.session_state["pos_filter"] = pos_sel[:]
 
+# ---- Minutes filter
 min_minutes = st.sidebar.number_input("Minimum minutes", min_value=0, max_value=10000, value=900, step=30)
 df = filter_by_minutes(df, min_minutes)
 
-# NEW: Maximum age filter
+# ================== IMPORTANT SPLIT ==================
+# Keep this **pre–age filter** copy for ALL calculations
+df_for_calc = df.copy()
+st.session_state["df_for_calc"] = df_for_calc
+
+# Age filter ONLY affects what the user sees/selections
 max_age = st.sidebar.number_input(
     "Maximum age",
     min_value=14, max_value=50, value=40, step=1,
     key="max_age_filter"
 )
-df = df[pd.to_numeric(df['Age'], errors='coerce') <= max_age]
+df_display = df[pd.to_numeric(df['Age'], errors='coerce') <= max_age]
+
+# From here on, use df = df_display for UI
+df = df_display
 
 # NEW/CHANGED — keep dropdown selection stable across filter changes
 player_list = df['Player'].dropna().unique().tolist()
@@ -1426,19 +1421,19 @@ player_row = (
     else (df[df['Player'] == player_name].iloc[0] if player_name else None)
 )
 
-
 arch_keys = list(archetype_params_full.keys())
 arch_choice = st.sidebar.selectbox("Archetype", arch_keys) if arch_keys else None
 stat_cols_for_arch = archetype_params_full.get(arch_choice, []) if arch_choice else []
 
-def league_filter_ui(dfin):
+def league_filter_ui(dfin, key=None):
     dfin = dfin.copy()
     dfin['LeagueName'] = dfin['Comp'].apply(league_strip_prefix)
     leagues = sorted(dfin['LeagueName'].dropna().unique().tolist())
-    chosen = st.multiselect("Filter by league(s) (optional)", leagues)
+    chosen = st.multiselect("Filter by league(s) (optional)", leagues, key=key)
     if chosen:
         dfin = dfin[dfin['LeagueName'].isin(chosen)]
     return dfin.drop(columns=['LeagueName'], errors='ignore')
+
 
 MODE_ITEMS = [
     ("Similar", "1"),
@@ -1466,12 +1461,15 @@ if mode == "1":
     else:
         role_name = arch_choice
         role_stats = stat_cols_for_arch
-        df_for_calc = df.copy()
+
+        # Similarity among the visible pool
         st.subheader("Similarity")
-        other_row = plot_similarity_and_select(df_for_calc, player_row, role_stats, role_name)
+        other_row = plot_similarity_and_select(df, player_row, role_stats, role_name)
+
         if other_row is not None:
             st.subheader("Radar comparison (percentiles)")
-            radar_fig = plot_radar_percentiles(player_row, other_row, role_stats, df_for_calc, role_name)
+            # Percentiles computed vs pre-age pool
+            radar_fig = plot_radar_percentiles(player_row, other_row, role_stats, st.session_state["df_for_calc"], role_name)
             try:
                 png_bytes = fig_to_png_bytes_plotly(radar_fig)
                 st.download_button(
@@ -1487,7 +1485,7 @@ if mode == "1":
 
             for s in role_stats:
                 v = other_row.get(s, np.nan)
-                p = position_relative_percentile(df_for_calc, other_row, s)
+                p = position_relative_percentile(st.session_state["df_for_calc"], other_row, s)
                 if pd.notnull(v):
                     lines.append(f"{stat_display_names.get(s,s)}: {v:.2f} (Percentile: {p:.1f}%)")
 
@@ -1503,12 +1501,14 @@ if mode == "1":
                 file_name=f"summary_{safe_base}.txt",
                 mime="text/plain"
             )
+
 elif mode == "2":
     if player_row is None or arch_choice is None:
         st.info("Pick a player and archetype in the sidebar.")
     else:
         role_name = arch_choice
-        fig, df_csv = show_percentile_bar_chart(player_row, stat_cols_for_arch, df, role_name)
+        # Compute percentiles vs pre-age pool
+        fig, df_csv = show_percentile_bar_chart(player_row, stat_cols_for_arch, st.session_state["df_for_calc"], role_name)
         try:
             png = fig_to_png_bytes_plotly(fig)
             st.download_button(
@@ -1545,10 +1545,11 @@ elif mode == "3":
             "Dark (no toppings)":     (False, False),
         }
         lightmode, toppings = style_cfg[chosen_style]
+        # Use pre-age pool for percentiles + role score badge
         fig = show_pizza(
             player_row,
             stat_cols_for_arch,
-            df,
+            st.session_state["df_for_calc"],
             role_name,
             lightmode=lightmode,
             toppings=toppings,
@@ -1566,8 +1567,11 @@ elif mode == "3":
 elif mode == "4":
     role_name = st.selectbox("Role", list(position_weights.keys()))
     role_stats = list(position_weights[role_name].keys())
-    df_role = league_filter_ui(df)
-    top, fig = plot_role_leaderboard(df_role, role_name, role_stats)
+    # League-filter both views
+    df_role_display = league_filter_ui(df, key="league_filter_role_display")
+    df_role_calc    = league_filter_ui(st.session_state["df_for_calc"], key="league_filter_role_calc")
+
+    top, fig = plot_role_leaderboard(df_role_display, role_name, role_stats, df_role_calc)
     csv = top[['Player','Age','Squad','Nation','Mins','RoleScore'] + role_stats].copy()
     csv['Role'] = role_name
     st.download_button("Download CSV", csv.to_csv(index=False).encode("utf-8"), file_name=f"top_{role_name.replace(' ','_')}.csv")
@@ -1595,28 +1599,26 @@ elif mode == "5":
             relevant_roles.extend([r for r in archetype_params_full if any(kw in r for kw in kws)])
         relevant_roles = list(dict.fromkeys(relevant_roles)) or list(archetype_params_full.keys())
 
-        df_for_calc = df.copy()
-        rs_df = precompute_role_scores(df_for_calc)
+        df_for_calc_local = st.session_state["df_for_calc"]
+        rs_df = precompute_role_scores(df_for_calc_local)
 
         role_scores, role_details = [], {}
         for role in relevant_roles:
-            # from cache first
             score = None
             if role in rs_df.columns and player_row.name in rs_df.index:
                 sc = rs_df.loc[player_row.name, role]
                 if pd.notnull(sc):
                     score = float(sc)
             if score is None:
-                # fallback
                 stats_list = archetype_params_full.get(role, [])
-                score = calculate_role_score(player_row, stats_list, df_for_calc, role)
+                score = calculate_role_score(player_row, stats_list, df_for_calc_local, role)
 
             stats_list = archetype_params_full.get(role, [])
             detail_rows = []
             for s in stats_list:
                 val = player_row.get(s, np.nan)
                 if pd.notnull(val):
-                    pctl = position_relative_percentile(df_for_calc, player_row, s)
+                    pctl = position_relative_percentile(df_for_calc_local, player_row, s)
                     detail_rows.append((stat_display_names.get(s,s), val, pctl))
             role_scores.append((role, score))
             role_details[role] = detail_rows
@@ -1658,7 +1660,8 @@ elif mode == "6":
     else:
         x = st.selectbox("Choose a stat", [display_names[c] for c in numeric_cols])
         stat_col = [c for c in numeric_cols if display_names[c] == x][0]
-        df_league = league_filter_ui(df)
+        df_league = league_filter_ui(df, key="league_filter_stat_leaders")
+
         top, fig = show_top_players_by_stat(df_league, x, stat_col)
 
 elif mode == "7":
@@ -1689,10 +1692,18 @@ elif mode == "7":
                         value=1.0, step=0.1, format="%.2f", key=f"wt_{s}"
                     )
 
-            df_league = league_filter_ui(df)
+            # League-filter both views
+            df_league_display = league_filter_ui(df, key="league_filter_custom_display")
+            # if you also run a separate calc pool:
+            df_league_calc    = league_filter_ui(st.session_state["df_for_calc"], key="league_filter_custom_calc")
 
-            dfc = df_league.copy()
-            dfc['CustomScore'] = [calculate_custom_archetype_score(r, stat_cols, df_league, weights) for _, r in df_league.iterrows()]
+
+            # Compute scores for *visible* rows using calc pool as baseline
+            dfc = df_league_display.copy()
+            dfc['CustomScore'] = [
+                calculate_custom_archetype_score(r, stat_cols, df_league_calc, weights)
+                for _, r in dfc.iterrows()
+            ]
             top = dfc.dropna(subset=['CustomScore']).nlargest(10, 'CustomScore').reset_index(drop=True)
 
             pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
@@ -1745,13 +1756,13 @@ elif mode == "7":
             st.markdown("### Score any player")
             default_lookup = player_row['Player'] if player_row is not None else ""
             lookup_name = st.text_input("Type a player name", value=default_lookup, key="custom_lookup")
-            target_row = find_player_row(df_league, lookup_name) if lookup_name else None
+            target_row = find_player_row(df_league_display, lookup_name) if lookup_name else None
             if target_row is None and lookup_name:
                 st.warning("No close match found.")
             if target_row is not None:
-                score = calculate_custom_archetype_score(target_row, stat_cols, df_league, weights)
+                score = calculate_custom_archetype_score(target_row, stat_cols, df_league_calc, weights)
                 st.metric(f"{target_row['Player']} — {custom_name}", f"{score:.2f}")
-                _ = show_percentile_bar_chart(target_row, stat_cols, df_league, custom_name)
+                _ = show_percentile_bar_chart(target_row, stat_cols, df_league_calc, custom_name)
 
 elif mode == "12":
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
@@ -1760,7 +1771,6 @@ elif mode == "12":
         x_pick = st.selectbox("X-axis stat", [display_names[c] for c in numeric_cols], index=0)
         y_pick = st.selectbox("Y-axis stat", [display_names[c] for c in numeric_cols], index=1)
         search_name = st.text_input("Search & highlight a player (optional)", key="stat_scatter_search")
-
 
         x_col = [c for c in numeric_cols if display_names[c] == x_pick][0]
         y_col = [c for c in numeric_cols if display_names[c] == y_pick][0]
@@ -1819,12 +1829,15 @@ elif mode == "13":
     role_y = st.selectbox("Y-axis role", arch_keys, index=1, key="role_y")
     search_name = st.text_input("Search & highlight a player (optional)", key="role_scatter_search")
 
-    dfc = df.copy()
-    dfc['RoleScore_X'] = compute_role_scores_cached(dfc, role_x)
-    dfc['RoleScore_Y'] = compute_role_scores_cached(dfc, role_y)
+    # Compute on calc pool, project onto visible
+    dfx = df.copy()
+    ser_x = compute_role_scores_cached(st.session_state["df_for_calc"], role_x)
+    ser_y = compute_role_scores_cached(st.session_state["df_for_calc"], role_y)
+    dfx['RoleScore_X'] = ser_x.reindex(dfx.index)
+    dfx['RoleScore_Y'] = ser_y.reindex(dfx.index)
 
     try:
-        dfc['Age'] = pd.to_numeric(dfc['Age'], errors='coerce').astype('Int64')
+        dfx['Age'] = pd.to_numeric(dfx['Age'], errors='coerce').astype('Int64')
     except Exception:
         pass
 
@@ -1835,16 +1848,16 @@ elif mode == "13":
         f"{role_x}: {r['RoleScore_X']:.1f}<br>"
         f"{role_y}: {r['RoleScore_Y']:.1f}<br>"
         f"Minutes: {int(r.get('Mins',0)):,}"
-        for _, r in dfc.iterrows()
+        for _, r in dfx.iterrows()
     ]
 
     text_labels, marker_colors, marker_sizes, marker_lines, highlight = scatter_labels_and_styles(
-        dfc, 'RoleScore_X', 'RoleScore_Y', search_name.strip() if search_name else None
+        dfx, 'RoleScore_X', 'RoleScore_Y', search_name.strip() if search_name else None
     )
 
     fig = go.Figure([
         go.Scatter(
-            x=dfc['RoleScore_X'], y=dfc['RoleScore_Y'],
+            x=dfx['RoleScore_X'], y=dfx['RoleScore_Y'],
             mode='markers+text',
             text=text_labels,
             textposition='top center',
@@ -1869,11 +1882,13 @@ elif mode == "13":
 
     if search_name and not highlight:
         st.caption("No close match found for that player.")
+
 elif mode == "14":
     st.subheader("Player Finder")
 
     # Optional league filter
-    df_league = league_filter_ui(df)
+    df_league = league_filter_ui(df, key="league_filter_player_finder")
+
 
     # Available numeric stats (same rule as elsewhere)
     numeric_cols = [c for c in df_league.columns if pd.api.types.is_numeric_dtype(df_league[c]) and c not in ['Age', 'Mins']]
@@ -1905,7 +1920,7 @@ elif mode == "14":
 
             max_results = st.slider("Max players to show", 10, 200, 60, step=10)
 
-            # GLOBAL percentiles for Mode 14 (cached)
+            # GLOBAL percentiles for Player Finder (cached) — intentionally uses *visible* dataset
             with st.spinner("Computing percentiles..."):
                 pct_df = _compute_percentiles_table(df_league, selected_stats, baseline="global")
 
@@ -1997,19 +2012,20 @@ elif mode == "14":
                             unsafe_allow_html=True
                         )
                     shown += 1
+
 elif mode == "15":
     st.subheader("Glossary & Help")
 
     st.markdown("""
 **Welcome!** This app lets you explore footballer performance via role-based scoring, percentiles, and visualizations.
-Use the sidebar to filter your dataset (database, positions, minutes) and to pick players/archetypes.  
+Use the sidebar to filter your dataset (database, positions, minutes, max age) and to pick players/archetypes.  
 Below is a quick reference of **sidebar options** and **all modes**.
 """)
 
     with st.expander("Sidebar Options", expanded=True):
         st.markdown("""
-- **Database**  
-  Choose which CSV(s) to load (`BigDB_ALL.csv`, `BigDB.csv`, or **Both**).
+- **Season / Database**  
+  Choose which season folder (e.g., `25/26 DBs`) and which CSV(s) to load (`BigDB_ALL.csv`, `BigDB.csv`, or **Both**).
 
 - **Filter by position(s)** *(defaults: DF, MF, FW)*  
   Filters your dataset to broad groups. Each group includes common sub-roles (e.g., DF includes CB/LB/RB/WB etc.).  
@@ -2018,15 +2034,14 @@ Below is a quick reference of **sidebar options** and **all modes**.
 - **Minimum minutes**  
   Drops players below this minutes threshold.
 
+- **Maximum age**  
+  Hides older players from the UI. **All percentiles and Role Scores are computed on the pre–age dataset** so they don't change when this slider moves.
+
 - **Player (dropdown) / Or type a player name**  
   Pick the player you want to analyze. Typing will fuzzy-match if needed.
 
 - **Archetype**  
-  Choose a predefined role (e.g., “CB - Ball-Playing”) or a category pizza (e.g., “Shooting Pizza”).  
-  Archetype lists define which stats are used in that mode.
-
-- **League filter** *(shown inside some modes)*  
-  Lets you limit to selected leagues before computing leaders/percentiles.
+  Choose a predefined role (e.g., "CB - Ball-Playing") or a category pizza (e.g., "Shooting Pizza").
         """)
 
     st.markdown("### Modes")
@@ -2035,93 +2050,69 @@ Below is a quick reference of **sidebar options** and **all modes**.
         st.markdown("""
 Find the **most similar players** to your selected player for a chosen archetype.  
 - Uses cosine similarity on the archetype’s stat set (standardized).  
-- The radar that follows shows **positional percentiles** for the two players.
+- The radar that follows shows **positional percentiles** for the two players (computed on the pre–age dataset).
         """)
 
     with st.expander("Mode 2 — Percentiles"):
         st.markdown("""
-Horizontal bar chart of your player’s **positional percentiles** for the chosen archetype’s stats.
+Horizontal bar chart of your player’s **positional percentiles** for the chosen archetype’s stats (pre–age dataset).  
 You can download the chart (PNG) and the data (CSV).
         """)
 
     with st.expander("Mode 3 — Pizza"):
         st.markdown("""
-Radar (pizza) chart of **positional percentiles** for the chosen archetype.  
-- The **Role Score** badge uses cached positional percentile–based scoring when available.  
+Radar (pizza) chart of **positional percentiles** for the chosen archetype (pre–age dataset).  
+- The **Role Score** badge uses cached positional percentile–based scoring (pre–age dataset).  
 - Style options: Light/Dark, toppings on/off.  
 - Download as PNG.
         """)
 
     with st.expander("Mode 4 — Role Leaders"):
         st.markdown("""
-Top 10 players by **Role Score** for a selected role.  
-- Uses **cached** positional percentile–based scores for speed.  
+Top 10 players by **Role Score** (computed on the pre–age dataset), **ranked within the visible set** after age filters.  
 - Download the leaderboard as CSV.
         """)
 
     with st.expander("Mode 5 — Best Roles"):
         st.markdown("""
 Ranks **all roles** (relevant to the player’s positions) by suitability for the selected player.  
-- Uses cached Role Scores where available (falls back to on-the-fly if needed).  
-- Detail table shows **player values** and **positional percentiles** per stat.
+- Scores and per-stat percentiles are computed on the **pre–age dataset** so they don’t change with the Max Age slider.
         """)
 
     with st.expander("Mode 6 — Stat Leaders"):
         st.markdown("""
 Top 10 for a **single stat** of your choice (no percentiles here).  
-Great for raw-volume/specific metric leaderboards.
+Great for raw-volume/specific metric leaderboards among the visible (age-filtered) set.
         """)
 
     with st.expander("Mode 7 — Custom Archetype"):
         st.markdown("""
 Build your own archetype (up to 10 stats + custom weights).  
-- Scores are computed using **positional percentiles**.  
-- Shows a Top 10 leaderboard + a tool to **score any single player**.  
+- Scores for visible players are computed using **positional percentiles** vs the **pre–age** league-filtered dataset.  
+- Shows a Top 10 leaderboard + a tool to **score any single visible player**.  
 - You can download the leaderboard CSV.
         """)
 
-    with st.expander("Mode 8 — Stat Scatter"):
+    with st.expander("Mode 12 — Stat Scatter"):
         st.markdown("""
-Scatter plot for any **two numeric stats**.  
+Scatter plot for any **two numeric stats** among the visible (age-filtered) dataset.  
 Search to highlight a player. Labels auto-show for extreme values.
         """)
 
-    with st.expander("Mode 9 — Role Matrix"):
+    with st.expander("Mode 13 — Role Matrix"):
         st.markdown("""
-Scatter plot with **two Role Scores** as axes (e.g., “Winger - Inverted” vs “ST - Target Man”).  
-- Uses **cached** scores for speed when possible.  
-- Search to highlight a player.
+Scatter plot with **two Role Scores** as axes (computed on the **pre–age dataset**), displayed for players in the visible (age-filtered) set.  
+Search to highlight a player.
         """)
 
-    with st.expander("Mode 10 — Player Finder"):
+    with st.expander("Mode 14 — Player Finder"):
         st.markdown("""
-Filter the dataset by **minimum percentiles** on up to 10 stats.  
-- Uses **GLOBAL percentiles** (across the filtered dataset) — not positional.  
+Filter the dataset by **minimum GLOBAL percentiles** on up to 10 stats.  
+- Uses **GLOBAL percentiles across the visible (age-filtered) dataset** by design.  
 - Cards show each stat’s **actual value** and its **(percentile)**.  
 - Results are sorted by the **average** of the selected global percentiles.
         """)
-    with st.expander("Mode 11 — Radar Plot"):
-        st.markdown("""
-Creates Comparison Radar Plots between two players for the selected archetype.  
-- Values shown in percentiles 
-- Click on the key in the top corner to hide one of the players.  
-        """)
 
-    st.markdown("---")
-    with st.expander("Notes on Percentiles & Scores", expanded=False):
-        st.markdown("""
-- **Positional vs Global percentiles**  
-  - Most modes use **positional percentiles** (compare only to players with overlapping positions).  
-  - **Player Finder** (Mode 10) uses **global percentiles** (compare to everyone after filters).
-- **Role Scores**  
-  - Weighted averages of percentiles per role; some roles apply small adjustments.  
-  - Cached and re-used across modes for performance; recalculated when dataset filters change.
-- **Category Pizzas (e.g., Shooting, Passing)**  
-  - Percentiles are positional in the charts.  
-  - Internally, category-level scores are cached from positional percentiles for speed.
-        """)
-
-    
 elif mode == "16":
     if arch_choice is None:
         st.info("Pick an archetype in the sidebar.")
@@ -2129,20 +2120,20 @@ elif mode == "16":
         role_name = arch_choice
         role_stats = stat_cols_for_arch
 
-        df_for_calc = df.copy()
-        players = df_for_calc['Player'].dropna().unique().tolist()
+        df_for_calc_local = st.session_state["df_for_calc"]
+        players = df['Player'].dropna().unique().tolist()  # choose from visible
 
         default_a = player_row['Player'] if player_row is not None else (players[0] if players else None)
         pA_name = st.selectbox("Player A", players, index=(players.index(default_a) if default_a in players else 0) if players else 0)
         pB_name = st.selectbox("Player B", players, index=(players.index(default_a) if default_a in players else 0) if players else 0, key="h2h_b")
 
-        pA = df_for_calc[df_for_calc['Player'] == pA_name].iloc[0] if pA_name else None
-        pB = df_for_calc[df_for_calc['Player'] == pB_name].iloc[0] if pB_name else None
+        pA = df_for_calc_local[df_for_calc_local['Player'] == pA_name].iloc[0] if pA_name else None
+        pB = df_for_calc_local[df_for_calc_local['Player'] == pB_name].iloc[0] if pB_name else None
 
         if pA is None or pB is None or pA_name == pB_name:
             st.info("Pick two different players.")
         else:
-            radar_fig = plot_radar_percentiles(pA, pB, role_stats, df_for_calc, role_name)
+            radar_fig = plot_radar_percentiles(pA, pB, role_stats, df_for_calc_local, role_name)
             try:
                 png_bytes = fig_to_png_bytes_plotly(radar_fig)
                 st.download_button(
@@ -2158,8 +2149,8 @@ elif mode == "16":
             for s in role_stats:
                 vA = pA.get(s, np.nan)
                 vB = pB.get(s, np.nan)
-                pA_pct = position_relative_percentile(df_for_calc, pA, s)
-                pB_pct = position_relative_percentile(df_for_calc, pB, s)
+                pA_pct = position_relative_percentile(df_for_calc_local, pA, s)
+                pB_pct = position_relative_percentile(df_for_calc_local, pB, s)
                 rows.append({
                     "Stat": stat_display_names.get(s, s),
                     f"{pA_name} (val)": vA,
