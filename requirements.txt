@@ -9,3 +9,4 @@ scikit-learn
 Pillow
 requests
 kaleido
+json

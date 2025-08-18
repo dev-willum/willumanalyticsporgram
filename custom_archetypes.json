@@ -1,0 +1,32 @@
+{
+  "Custom Archetype": {
+    "stats": [
+      "Completed90s",
+      "npXGA/90"
+    ],
+    "weights": {
+      "Completed90s": 1.0,
+      "npXGA/90": 1.0
+    }
+  },
+  "Output Merchant": {
+    "stats": [
+      "goals/90",
+      "assists/90",
+      "G/Sh"
+    ],
+    "weights": {
+      "goals/90": 1.0,
+      "assists/90": 1.0,
+      "G/Sh": 1.0
+    }
+  },
+  "Anti Ball": {
+    "stats": [
+      "deadPassesToGoal/90"
+    ],
+    "weights": {
+      "deadPassesToGoal/90": 1.0
+    }
+  }
+}

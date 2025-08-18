@@ -34,6 +34,8 @@ import streamlit as st
 from PIL import Image
 import requests
 
+import json
+
 
 # =========================
 # ====== CONFIG & DATA ====
@@ -364,18 +366,24 @@ def apply_hover_style(fig):
     )
     fig.update_layout(font=dict(family=FONT_FAMILY))
 
-def _positions_suffix() -> str:
+
+def _positions_suffix(include_age: bool = True, leagues: list[str] | None = None) -> str:
     parts = []
     pos = st.session_state.get("pos_filter", [])
     if pos:
         parts.append(f"Positions: {', '.join(pos)}")
-    max_age = st.session_state.get("max_age_filter", None)
-    if max_age is not None:
-        parts.append(f"Max Age ≤ {int(max_age)}")
+    if include_age:
+        max_age = st.session_state.get("max_age_filter", None)
+        if max_age is not None:
+            parts.append(f"Max Age ≤ {int(max_age)}")
+    if leagues:
+        parts.append(f"Leagues: {', '.join(leagues)}")
     return f" | {' • '.join(parts)}" if parts else ""
 
-def _with_pos_filter(title: str) -> str:
-    return f"{title}{_positions_suffix()}"
+def _with_pos_filter(title: str, include_age: bool = True, leagues: list[str] | None = None) -> str:
+    return f"{title}{_positions_suffix(include_age=include_age, leagues=leagues)}"
+
+
 
 def scatter_labels_and_styles(dfx: pd.DataFrame, x_col: str, y_col: str, search_name: str | None):
     label_set = set()
@@ -714,31 +722,39 @@ def _precompute_positional_percentiles(df: pd.DataFrame, stats_needed: tuple[str
     return out
 
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def compute_role_scores_cached(df: pd.DataFrame, role_name: str) -> pd.Series:
     """
     Fast, cached RoleScore for ALL players for a given role (positional baseline).
+    Works for built-ins AND saved custom archetypes.
     Applies weights + per-role adjustment.
     Enforces: RoleScore = 0 if the player has no data for ANY shooting stat.
     """
-    stats_list = tuple(archetype_params_full.get(role_name, []))
+    # Use merged catalog (built-ins + customs)
+    catalog = get_archetype_catalog_and_merge_weights()
+    stats_list = tuple(catalog.get(role_name, []))
     if not stats_list:
-        return pd.Series(50.0, index=df.index)
+        # Unknown role -> neutral 50 so charts don't crash
+        return pd.Series(50.0, index=df.index, dtype=float)
 
+    # Vectorized positional percentiles for the needed stats
     pcts = _precompute_positional_percentiles(df, stats_list)
 
+    # Pull weights (custom roles are injected into position_weights by the merge helper)
     weights_map = position_weights.get(role_name, {})
     w = pd.Series({s: float(weights_map.get(s, 1.0)) for s in stats_list}, dtype=float)
-    P = pcts.reindex(columns=stats_list)
 
+    P = pcts.reindex(columns=list(stats_list))
     mask = ~P.isna()
     num = (P * w).sum(axis=1, skipna=True)
     den = (mask * w).sum(axis=1)
     scores = (num / den).where(den > 0)
 
+    # Per-role adjustment, clip to 0..100
     adj = position_adjustments.get(role_name, lambda x: x)
     scores = scores.apply(lambda x: adj(x) if pd.notnull(x) else np.nan).clip(0, 100)
 
-    # Keeper / no-shooting-data rule
+    # If a row has no shooting data at all, force 0
     shooting_cols = [c for c in pizza_plot_categories.get("Shooting", []) if c in df.columns]
     if shooting_cols:
         no_shoot = df[shooting_cols].apply(pd.to_numeric, errors="coerce").isna().all(axis=1)
@@ -746,26 +762,23 @@ def compute_role_scores_cached(df: pd.DataFrame, role_name: str) -> pd.Series:
 
     return scores
 
+
 @st.cache_data(show_spinner=False)
 def precompute_role_scores(df_in: pd.DataFrame) -> pd.DataFrame:
     """
-    Cached, vectorized role/category scores (positional baseline).
-    - All weighted roles
-    - All category pizzas (equal-weight average)
-    Applies:
-      * RoleScore = 0 if no shooting data
-      * Category score = 0 if no data in that category
+    Cached, vectorized role/category scores (positional baseline) for ALL roles,
+    including any saved custom roles.
     """
     if df_in.empty:
         return pd.DataFrame(index=df_in.index)
 
-    # All stats needed
-    needed_stats = sorted({s for stats in archetype_params_full.values() for s in stats})
+    catalog = get_archetype_catalog_and_merge_weights()
+    needed_stats = sorted({s for stats in catalog.values() for s in stats})
     pcts_pos = _precompute_positional_percentiles(df_in, tuple(needed_stats))
 
     scores = {}
 
-    # Roles (weighted)
+    # Weighted roles (keys come from position_weights, which now includes customs)
     for role, weights in position_weights.items():
         stats_list = [s for s in weights.keys() if s in pcts_pos.columns]
         if not stats_list:
@@ -782,7 +795,6 @@ def precompute_role_scores(df_in: pd.DataFrame) -> pd.DataFrame:
         adj_fn = position_adjustments.get(role, lambda x: x)
         role_score = role_score.apply(lambda x: adj_fn(x) if pd.notnull(x) else np.nan).clip(0, 100)
 
-        # No shooting data -> 0
         shooting_cols = [c for c in pizza_plot_categories.get("Shooting", []) if c in df_in.columns]
         if shooting_cols:
             no_shoot = df_in[shooting_cols].apply(pd.to_numeric, errors="coerce").isna().all(axis=1)
@@ -791,17 +803,16 @@ def precompute_role_scores(df_in: pd.DataFrame) -> pd.DataFrame:
         scores[role] = role_score
 
     # Category pizzas (equal-weight)
-    cat_keys = [k for k in archetype_params_full.keys() if k not in position_weights]
+    cat_keys = [k for k in catalog.keys() if k not in position_weights]
     for cat in cat_keys:
-        stats_list = [s for s in archetype_params_full.get(cat, []) if s in pcts_pos.columns]
+        stats_list = [s for s in catalog.get(cat, []) if s in pcts_pos.columns]
         if not stats_list:
             scores[cat] = np.nan
             continue
         P = pcts_pos[stats_list]
         cat_score = P.mean(axis=1, skipna=True)
 
-        # No data in that category -> 0
-        raw_cols = [s for s in archetype_params_full.get(cat, []) if s in df_in.columns]
+        raw_cols = [s for s in catalog.get(cat, []) if s in df_in.columns]
         if raw_cols:
             no_cat = df_in[raw_cols].apply(pd.to_numeric, errors="coerce").isna().all(axis=1)
             cat_score = cat_score.mask(no_cat, 0.0)
@@ -809,6 +820,67 @@ def precompute_role_scores(df_in: pd.DataFrame) -> pd.DataFrame:
         scores[cat] = cat_score.clip(0, 100)
 
     return pd.DataFrame(scores, index=df_in.index)
+
+# ---------- Custom Archetype Persistence ----------
+ARCHETYPE_STORE = os.path.join(APP_DIR, "custom_archetypes.json")
+
+@st.cache_data(show_spinner=False)
+def load_archetype_store() -> dict:
+    """
+    Returns { archetype_name: { "stats": [col,...], "weights": {col: float, ...} }, ... }
+    """
+    if os.path.isfile(ARCHETYPE_STORE):
+        try:
+            with open(ARCHETYPE_STORE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+def write_archetype_store(store: dict) -> None:
+    try:
+        with open(ARCHETYPE_STORE, "w", encoding="utf-8") as f:
+            json.dump(store, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+# ---------- Merge saved customs into catalog + weights ----------
+def get_archetype_catalog_and_merge_weights() -> dict:
+    """
+    Returns a dict {role_name: [stat cols,...]} that includes:
+    - built-in weighted roles
+    - built-in category pizzas
+    - saved custom archetypes (from JSON)
+
+    Also merges each custom's weights into the global position_weights so all
+    scoring functions (e.g., compute_role_scores_cached) can use them.
+    If a saved name collides with a built-in name, we suffix " (Custom)".
+    """
+    # Base catalogs
+    base_catalog = {**archetype_params, **category_archetypes}
+
+    store = load_archetype_store()
+    custom_stats_map = {}
+    custom_weights_map = {}
+
+    for name, payload in (store or {}).items():
+        target_name = name if name not in base_catalog else f"{name} (Custom)"
+        stats = list(payload.get("stats", []))
+        weights = {k: float(v) for k, v in payload.get("weights", {}).items()}
+        custom_stats_map[target_name] = stats
+        custom_weights_map[target_name] = weights
+
+    # Merge custom weights into global role map (idempotent on reruns)
+    for role_name, wmap in custom_weights_map.items():
+        position_weights[role_name] = wmap
+
+    # Final catalog used everywhere in UI
+    merged_catalog = {**base_catalog, **custom_stats_map}
+    return merged_catalog
+
 
 # =================
 # PLOT FUNCTIONS
@@ -935,7 +1007,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
                  fontweight='bold', color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.952, f"{club} | {nationality} | {age_txt} | {season}", ha='center', va='top', fontsize=15,
                  color=header_color, fontproperties=font_normal)
-        suffix = _positions_suffix()
+        suffix = _positions_suffix(include_age=False)
         fig.text(0.5, 0.928, f"Role: {role_name} | Minutes played: {mins}{suffix}",
             ha='center', va='top', fontsize=12, color=header_color, fontproperties=font_normal)
         fig.text(0.5, 0.01, "willumanalytics",
@@ -972,20 +1044,14 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
     st.pyplot(fig, clear_figure=False)
     return fig
 
-def plot_role_leaderboard(df_display, role_name, role_stats, df_for_calc):
-    """
-    - Compute Role Scores on df_for_calc (pre–age filter)
-    - Reindex scores onto df_display (age-filtered) and rank within the visible set
-    """
+def plot_role_leaderboard(df_filtered, role_name, role_stats, leagues: list[str] | None = None):
+    # Use fast cached series
     try:
-        scores_all = compute_role_scores_cached(df_for_calc, role_name)
+        dfc = df_filtered.copy()
+        dfc['RoleScore'] = compute_role_scores_cached(dfc, role_name)
     except Exception:
-        scores_all = pd.Series(index=df_for_calc.index, dtype=float)
-        for idx, row in df_for_calc.iterrows():
-            scores_all.loc[idx] = calculate_role_score(row, role_stats, df_for_calc, role_name)
-
-    dfc = df_display.copy()
-    dfc['RoleScore'] = scores_all.reindex(dfc.index)
+        dfc = df_filtered.copy()
+        dfc['RoleScore'] = [calculate_role_score(row, role_stats, dfc, role_name) for _, row in dfc.iterrows()]
 
     top = dfc.nlargest(10, 'RoleScore').reset_index(drop=True)
 
@@ -1015,7 +1081,7 @@ def plot_role_leaderboard(df_display, role_name, role_stats, df_for_calc):
         )
     ])
     fig.update_layout(
-        title=dict(text=_with_pos_filter(f"Top {role_name}s"), font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"Top {role_name}s", leagues=leagues), font=dict(color="#000", family=FONT_FAMILY)),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         xaxis=dict(title='Role Suitability Score (0–100)', range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -1026,7 +1092,8 @@ def plot_role_leaderboard(df_display, role_name, role_stats, df_for_calc):
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
 
-def show_top_players_by_stat(df, tidy_label, stat_col):
+
+def show_top_players_by_stat(df, tidy_label, stat_col, leagues: list[str] | None = None):
     top = df.nlargest(10, stat_col).reset_index(drop=True)
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
                     "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
@@ -1049,7 +1116,7 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
         )
     ])
     fig.update_layout(
-        title=dict(text=_with_pos_filter(f"Top 10: {tidy_label}"), font=dict(color="#000", family=FONT_FAMILY)),
+        title=dict(text=_with_pos_filter(f"Top 10: {tidy_label}", leagues=leagues), font=dict(color="#000", family=FONT_FAMILY)),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
         xaxis=dict(title=tidy_label, gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
         yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -1058,6 +1125,7 @@ def show_top_players_by_stat(df, tidy_label, stat_col):
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
+
 
 def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     X = df_filtered[stat_cols].fillna(0)
@@ -1377,8 +1445,7 @@ df = filter_by_minutes(df, min_minutes)
 
 # ================== IMPORTANT SPLIT ==================
 # Keep this **pre–age filter** copy for ALL calculations
-df_for_calc = df.copy()
-st.session_state["df_for_calc"] = df_for_calc
+st.session_state["df_for_calc"] = df.copy()
 
 # Age filter ONLY affects what the user sees/selections
 max_age = st.sidebar.number_input(
@@ -1421,18 +1488,48 @@ player_row = (
     else (df[df['Player'] == player_name].iloc[0] if player_name else None)
 )
 
-arch_keys = list(archetype_params_full.keys())
-arch_choice = st.sidebar.selectbox("Archetype", arch_keys) if arch_keys else None
-stat_cols_for_arch = archetype_params_full.get(arch_choice, []) if arch_choice else []
+# NEW — include saved customs in the sidebar list
+archetype_catalog = get_archetype_catalog_and_merge_weights()
+arch_keys = list(archetype_catalog.keys())
 
-def league_filter_ui(dfin, key=None):
+# keep selection sticky across reruns
+default_arch = st.session_state.get("arch_choice_default", arch_keys[0] if arch_keys else None)
+if default_arch not in arch_keys and arch_keys:
+    default_arch = arch_keys[0]
+
+arch_choice = st.sidebar.selectbox(
+    "Archetype",
+    arch_keys,
+    index=(arch_keys.index(default_arch) if default_arch in arch_keys else 0) if arch_keys else 0,
+    key="arch_choice"
+)
+st.session_state["arch_choice_default"] = arch_choice
+
+stat_cols_for_arch = archetype_catalog.get(arch_choice, []) if arch_choice else []
+
+
+def league_filter_ui(dfin: pd.DataFrame, widget_key: str):
+    """
+    Single, keyed league multiselect that returns (filtered_df, chosen_leagues).
+    Use a unique widget_key per mode, e.g. 'mode4', 'mode6', 'mode7', 'mode14',
+    to avoid Streamlit duplicate element IDs.
+    """
     dfin = dfin.copy()
     dfin['LeagueName'] = dfin['Comp'].apply(league_strip_prefix)
     leagues = sorted(dfin['LeagueName'].dropna().unique().tolist())
-    chosen = st.multiselect("Filter by league(s) (optional)", leagues, key=key)
+
+    chosen = st.multiselect(
+        "Filter by league(s) (optional)",
+        leagues,
+        key=f"{widget_key}_leagues"
+    )
+
     if chosen:
         dfin = dfin[dfin['LeagueName'].isin(chosen)]
-    return dfin.drop(columns=['LeagueName'], errors='ignore')
+
+    dfin = dfin.drop(columns=['LeagueName'], errors='ignore')
+    return dfin, chosen
+
 
 
 MODE_ITEMS = [
@@ -1567,19 +1664,22 @@ elif mode == "3":
 elif mode == "4":
     role_name = st.selectbox("Role", list(position_weights.keys()))
     role_stats = list(position_weights[role_name].keys())
-    # League-filter both views
-    df_role_display = league_filter_ui(df, key="league_filter_role_display")
-    df_role_calc    = league_filter_ui(st.session_state["df_for_calc"], key="league_filter_role_calc")
 
-    top, fig = plot_role_leaderboard(df_role_display, role_name, role_stats, df_role_calc)
+    # Single keyed league filter for this mode
+    df_role, leagues_chosen = league_filter_ui(df, widget_key="mode4")
+
+    top, fig = plot_role_leaderboard(df_role, role_name, role_stats, leagues=leagues_chosen)
     csv = top[['Player','Age','Squad','Nation','Mins','RoleScore'] + role_stats].copy()
     csv['Role'] = role_name
     st.download_button("Download CSV", csv.to_csv(index=False).encode("utf-8"), file_name=f"top_{role_name.replace(' ','_')}.csv")
+
 
 elif mode == "5":
     if player_row is None:
         st.info("Pick a player in the sidebar.")
     else:
+        archetype_catalog = get_archetype_catalog_and_merge_weights()
+
         pos_str = player_row.get('Pos','')
         position_to_roles = {
             "GK": ["GK"], "DF": ["CB", "FB", "WB", "LB", "RB", "LWB", "RWB", "SW"],
@@ -1593,38 +1693,41 @@ elif mode == "5":
             if any(k in pos_str for k in ["DM","CM","AM","LM","RM","LW","RW","MF"]): sel_groups.append("MF")
             if any(k in pos_str for k in ["ST","CF","WF","Winger","FW"]): sel_groups.append("FW")
             sel_groups = list(dict.fromkeys(sel_groups))
+
         relevant_roles = []
         for group in sel_groups:
             kws = position_to_roles.get(group, [])
-            relevant_roles.extend([r for r in archetype_params_full if any(kw in r for kw in kws)])
-        relevant_roles = list(dict.fromkeys(relevant_roles)) or list(archetype_params_full.keys())
+            relevant_roles.extend([r for r in archetype_catalog if any(kw in r for kw in kws)])
+        relevant_roles = list(dict.fromkeys(relevant_roles)) or list(archetype_catalog.keys())
 
-        df_for_calc_local = st.session_state["df_for_calc"]
-        rs_df = precompute_role_scores(df_for_calc_local)
+        df_for_calc = df.copy()
+        rs_df = precompute_role_scores(df_for_calc)
 
         role_scores, role_details = [], {}
         for role in relevant_roles:
+            # try cached first
             score = None
             if role in rs_df.columns and player_row.name in rs_df.index:
                 sc = rs_df.loc[player_row.name, role]
                 if pd.notnull(sc):
                     score = float(sc)
             if score is None:
-                stats_list = archetype_params_full.get(role, [])
-                score = calculate_role_score(player_row, stats_list, df_for_calc_local, role)
+                stats_list = archetype_catalog.get(role, [])
+                score = calculate_role_score(player_row, stats_list, df_for_calc, role)
 
-            stats_list = archetype_params_full.get(role, [])
+            stats_list = archetype_catalog.get(role, [])
             detail_rows = []
             for s in stats_list:
                 val = player_row.get(s, np.nan)
                 if pd.notnull(val):
-                    pctl = position_relative_percentile(df_for_calc_local, player_row, s)
+                    pctl = position_relative_percentile(df_for_calc, player_row, s)
                     detail_rows.append((stat_display_names.get(s,s), val, pctl))
             role_scores.append((role, score))
             role_details[role] = detail_rows
+
         role_scores.sort(key=lambda x: x[1], reverse=True)
 
-        st.subheader(_with_pos_filter(f"Role suitability — {player_row['Player']}"))
+        st.subheader(_with_pos_filter(f"Role suitability — {player_row['Player']}", include_age=False))
         fig = go.Figure([go.Bar(
             x=[s for _, s in role_scores],
             y=[r for r, _ in role_scores],
@@ -1636,7 +1739,7 @@ elif mode == "5":
             text=[f"{s:.1f}" for _, s in role_scores], textposition='inside', insidetextanchor="middle"
         )])
         fig.update_layout(
-            title=dict(text=_with_pos_filter(f"Role suitability — {player_row['Player']}"), font=dict(color="#000", family=FONT_FAMILY)),
+            title=dict(text=_with_pos_filter(f"Role suitability — {player_row['Player']}", include_age=False), font=dict(color="#000", family=FONT_FAMILY)),
             plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
             xaxis=dict(title="Suitability (0–100)", range=[0,100], color="#000", tickfont=dict(color="#000"), linecolor="#000"),
             yaxis=dict(autorange='reversed', color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -1652,7 +1755,21 @@ elif mode == "5":
             st.write("**Stat details (player value, positional percentile):**")
             st.dataframe(pd.DataFrame(det, columns=["Stat","Value","Percentile (%)"]))
 
+
 elif mode == "6":
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
+    display_names = {c: stat_display_names.get(c,c) for c in numeric_cols}
+    if not numeric_cols:
+        st.warning("No numeric stat columns found.")
+    else:
+        x = st.selectbox("Choose a stat", [display_names[c] for c in numeric_cols])
+        stat_col = [c for c in numeric_cols if display_names[c] == x][0]
+
+        # Single keyed league filter for this mode
+        df_league, leagues_chosen = league_filter_ui(df, widget_key="mode6")
+
+        top, fig = show_top_players_by_stat(df_league, x, stat_col, leagues=leagues_chosen)
+
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
     display_names = {c: stat_display_names.get(c,c) for c in numeric_cols}
     if not numeric_cols:
@@ -1666,15 +1783,37 @@ elif mode == "6":
 
 elif mode == "7":
     st.subheader("Custom Archetype")
+
+    # Load saved archetypes once
+    store = load_archetype_store()
+
+    # Numeric pool
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
     if not numeric_cols:
         st.warning("No numeric stat columns found.")
     else:
         display_names = {c: stat_display_names.get(c, c) for c in numeric_cols}
-        name_default = st.session_state.get("custom_arch_name", "Custom Archetype")
-        custom_name = st.text_input("Archetype name", value=name_default, key="custom_arch_name")
 
-        picked_labels = st.multiselect("Pick up to 10 stats", [display_names[c] for c in numeric_cols])
+        # Saved archetype picker
+        saved_names = sorted(store.keys())
+        selected_saved = st.selectbox("Saved archetypes", ["(new)"] + saved_names, index=0, key="custom_arch_saved_pick")
+
+        # Defaults from saved (if chosen)
+        saved_stats = store.get(selected_saved, {}).get("stats", []) if selected_saved != "(new)" else []
+        saved_weights = store.get(selected_saved, {}).get("weights", {}) if selected_saved != "(new)" else {}
+
+        # Name field (editable)
+        name_default = selected_saved if selected_saved != "(new)" else st.session_state.get("custom_arch_name", "Custom Archetype")
+        custom_name = st.text_input("Archetype name", value=name_default, key=f"custom_arch_name_{selected_saved}")
+
+        # Stats picker (up to 10) — keyed by saved name so defaults refresh when switching
+        prefill_labels = [display_names[c] for c in saved_stats if c in numeric_cols]
+        picked_labels = st.multiselect(
+            "Pick up to 10 stats",
+            [display_names[c] for c in numeric_cols],
+            default=prefill_labels,
+            key=f"custom_arch_stats_{selected_saved}"
+        )
         stat_cols = [c for c in numeric_cols if display_names[c] in picked_labels][:10]
         if len(picked_labels) > 10:
             st.warning("Only the first 10 selected stats are used.")
@@ -1682,28 +1821,47 @@ elif mode == "7":
         if not stat_cols:
             st.info("Choose at least one stat to build your archetype.")
         else:
+            # Weights (defaults from saved if available)
             st.markdown("**Weights** (higher = more important; negatives allowed):")
-            cols = st.columns(min(5, len(stat_cols)))
+            cols_w = st.columns(min(5, len(stat_cols)))
             weights = {}
             for i, s in enumerate(stat_cols):
-                with cols[i % len(cols)]:
+                with cols_w[i % len(cols_w)]:
+                    default_w = float(saved_weights.get(s, 1.0))
                     weights[s] = st.number_input(
                         f"{display_names[s]}",
-                        value=1.0, step=0.1, format="%.2f", key=f"wt_{s}"
+                        value=default_w, step=0.1, format="%.2f", key=f"wt_{selected_saved}_{s}"
                     )
 
-            # League-filter both views
-            df_league_display = league_filter_ui(df, key="league_filter_custom_display")
-            # if you also run a separate calc pool:
-            df_league_calc    = league_filter_ui(st.session_state["df_for_calc"], key="league_filter_custom_calc")
+            # --- Save / Delete controls
+            c1, c2, c3 = st.columns([1,1,6])
+            with c1:
+                if st.button("💾 Save / Overwrite", key="btn_save_arch"):
+                    if custom_name.strip():
+                        new_entry = {"stats": stat_cols, "weights": weights}
+                        new_store = dict(store)
+                        new_store[custom_name.strip()] = new_entry
+                        write_archetype_store(new_store)
+                        load_archetype_store.clear()   # refresh cache
+                        st.success(f"Saved as '{custom_name.strip()}'.")
+                    else:
+                        st.warning("Please provide a name before saving.")
+            with c2:
+                if selected_saved != "(new)":
+                    if st.button("🗑️ Delete", key="btn_delete_arch"):
+                        new_store = dict(store)
+                        if selected_saved in new_store:
+                            del new_store[selected_saved]
+                            write_archetype_store(new_store)
+                            load_archetype_store.clear()
+                            st.success(f"Deleted '{selected_saved}'.")
 
+            # League filter (single, keyed for this mode)
+            df_league, leagues_chosen = league_filter_ui(df, widget_key="mode7")
 
-            # Compute scores for *visible* rows using calc pool as baseline
-            dfc = df_league_display.copy()
-            dfc['CustomScore'] = [
-                calculate_custom_archetype_score(r, stat_cols, df_league_calc, weights)
-                for _, r in dfc.iterrows()
-            ]
+            # Score + leaderboard
+            dfc = df_league.copy()
+            dfc['CustomScore'] = [calculate_custom_archetype_score(r, stat_cols, df_league, weights) for _, r in df_league.iterrows()]
             top = dfc.dropna(subset=['CustomScore']).nlargest(10, 'CustomScore').reset_index(drop=True)
 
             pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
@@ -1734,7 +1892,7 @@ elif mode == "7":
                 )
             ])
             fig.update_layout(
-                title=dict(text=_with_pos_filter(f"Top 10 — {custom_name}"), font=dict(color="#000", family=FONT_FAMILY)),
+                title=dict(text=_with_pos_filter(f"Top 10 — {custom_name}", leagues=leagues_chosen), font=dict(color="#000", family=FONT_FAMILY)),
                 plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
                 xaxis=dict(title='Score (0–100)', range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
                 yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
@@ -1756,13 +1914,14 @@ elif mode == "7":
             st.markdown("### Score any player")
             default_lookup = player_row['Player'] if player_row is not None else ""
             lookup_name = st.text_input("Type a player name", value=default_lookup, key="custom_lookup")
-            target_row = find_player_row(df_league_display, lookup_name) if lookup_name else None
+            target_row = find_player_row(df_league, lookup_name) if lookup_name else None
             if target_row is None and lookup_name:
                 st.warning("No close match found.")
             if target_row is not None:
-                score = calculate_custom_archetype_score(target_row, stat_cols, df_league_calc, weights)
+                score = calculate_custom_archetype_score(target_row, stat_cols, df_league, weights)
                 st.metric(f"{target_row['Player']} — {custom_name}", f"{score:.2f}")
-                _ = show_percentile_bar_chart(target_row, stat_cols, df_league_calc, custom_name)
+                _ = show_percentile_bar_chart(target_row, stat_cols, df_league, custom_name)
+
 
 elif mode == "12":
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['Age','Mins']]
@@ -1825,19 +1984,26 @@ elif mode == "12":
         st.warning("Need at least two numeric stat columns.")
 
 elif mode == "13":
-    role_x = st.selectbox("X-axis role", arch_keys, index=0, key="role_x")
-    role_y = st.selectbox("Y-axis role", arch_keys, index=1, key="role_y")
+    # Use merged catalog so custom roles appear
+    archetype_catalog = get_archetype_catalog_and_merge_weights()
+    all_roles = list(archetype_catalog.keys())
+
+    role_x = st.selectbox("X-axis role", all_roles, index=0, key="role_x")
+    role_y = st.selectbox("Y-axis role", all_roles, index=1 if len(all_roles) > 1 else 0, key="role_y")
     search_name = st.text_input("Search & highlight a player (optional)", key="role_scatter_search")
 
-    # Compute on calc pool, project onto visible
-    dfx = df.copy()
-    ser_x = compute_role_scores_cached(st.session_state["df_for_calc"], role_x)
-    ser_y = compute_role_scores_cached(st.session_state["df_for_calc"], role_y)
-    dfx['RoleScore_X'] = ser_x.reindex(dfx.index)
-    dfx['RoleScore_Y'] = ser_y.reindex(dfx.index)
+    # --- IMPORTANT: score on the age-independent baseline ---
+    base_df = st.session_state.get("df_for_calc", df)
+    scores_X_all = compute_role_scores_cached(base_df, role_x)
+    scores_Y_all = compute_role_scores_cached(base_df, role_y)
+
+    # Plot only the currently filtered subset, but reuse baseline scores
+    dfc = df.copy()
+    dfc["RoleScore_X"] = scores_X_all.reindex(dfc.index)
+    dfc["RoleScore_Y"] = scores_Y_all.reindex(dfc.index)
 
     try:
-        dfx['Age'] = pd.to_numeric(dfx['Age'], errors='coerce').astype('Int64')
+        dfc['Age'] = pd.to_numeric(dfc['Age'], errors='coerce').astype('Int64')
     except Exception:
         pass
 
@@ -1848,16 +2014,16 @@ elif mode == "13":
         f"{role_x}: {r['RoleScore_X']:.1f}<br>"
         f"{role_y}: {r['RoleScore_Y']:.1f}<br>"
         f"Minutes: {int(r.get('Mins',0)):,}"
-        for _, r in dfx.iterrows()
+        for _, r in dfc.iterrows()
     ]
 
     text_labels, marker_colors, marker_sizes, marker_lines, highlight = scatter_labels_and_styles(
-        dfx, 'RoleScore_X', 'RoleScore_Y', search_name.strip() if search_name else None
+        dfc, 'RoleScore_X', 'RoleScore_Y', search_name.strip() if search_name else None
     )
 
     fig = go.Figure([
         go.Scatter(
-            x=dfx['RoleScore_X'], y=dfx['RoleScore_Y'],
+            x=dfc['RoleScore_X'], y=dfc['RoleScore_Y'],
             mode='markers+text',
             text=text_labels,
             textposition='top center',
@@ -1883,11 +2049,13 @@ elif mode == "13":
     if search_name and not highlight:
         st.caption("No close match found for that player.")
 
+
 elif mode == "14":
     st.subheader("Player Finder")
 
     # Optional league filter
-    df_league = league_filter_ui(df, key="league_filter_player_finder")
+    df_league, leagues_chosen = league_filter_ui(df, widget_key="mode14")
+
 
 
     # Available numeric stats (same rule as elsewhere)
