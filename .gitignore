@@ -8,4 +8,4 @@ __pycache__/
 # Ignore environment files
 .env
 
-.json
+custom_archetypes.json
