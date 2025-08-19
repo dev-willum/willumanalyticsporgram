@@ -648,6 +648,44 @@ def fig_to_png_bytes_matplotlib(fig):
     buf.seek(0)
     return buf.getvalue()
 
+def export_custom_archetypes_named(label="Download custom archetypes (JSON)",
+                                  default_name="my_archetypes",
+                                  key_prefix="arch_export",
+                                  include_session=True,
+                                  include_saved_disk=False,
+                                  show_preview=True):
+    """
+    Filename input + download button that exports your custom archetypes.
+    By default, exports *session* customs only (most common). Toggle include_saved_disk=True
+    if you also want anything in custom_archetypes.json on disk.
+    """
+    fname_in = st.text_input("File name (no extension)", value=default_name, key=f"{key_prefix}_name")
+    add_date = st.checkbox("Append date (YYYYMMDD)", value=True, key=f"{key_prefix}_dated")
+    safe_base = re.sub(r"[^\w\-]+", "_", str(fname_in)).strip("_") or "my_archetypes"
+    if add_date:
+        from datetime import datetime
+        safe_base = f"{safe_base}_{datetime.now().strftime('%Y%m%d')}"
+    filename = f"{safe_base}.json"
+
+    payload = snapshot_custom_archetypes(include_session=include_session,
+                                         include_saved_disk=include_saved_disk)
+    # Helpful preview & count so you can see if it’s empty
+    if show_preview:
+        st.caption(f"Archetypes queued for export: **{len(payload.get('archetypes', []))}**")
+        with st.expander("Preview JSON", expanded=False):
+            st.code(json.dumps(payload, indent=2))
+
+    if not payload.get("archetypes"):
+        st.warning("No custom archetypes found to export. Add some or load a JSON first.")
+    st.download_button(
+        label,
+        data=json.dumps(payload, indent=2).encode("utf-8"),
+        file_name=filename,
+        mime="application/json",
+        key=f"{key_prefix}_btn"
+    )
+
+
 def set_mode(new_mode: str):
     st.session_state["mode"] = new_mode
 
@@ -676,31 +714,67 @@ def export_custom_archetypes_button(label="Download my custom archetypes (JSON)"
 
 def import_custom_archetypes_uploader(df_cols: set[str]):
     """
-    File uploader UI: merge valid archetypes into this user's session only.
-    We drop unknown stats (not in df) and coerce weights to floats.
+    Upload custom archetypes JSON *first* and give the upload a label.
+    Merges valid archetypes into this session (st.session_state['custom_arches']).
+    Tracks collections so they can be removed as a group.
     """
-    up = st.file_uploader("Load custom archetypes (JSON)", type=["json"], key="upload_custom_arches")
-    if up is None:
-        return
-    try:
-        data = json.load(up)
-        added = 0
-        for item in data.get("archetypes", []):
-            name = str(item.get("name", "")).strip()
-            if not name:
-                continue
-            stats = [s for s in (item.get("stats") or []) if s in df_cols]
-            w_raw = item.get("weights") or {}
-            weights = {k: float(v) for k, v in w_raw.items() if k in stats}
-            if stats:
-                st.session_state["custom_arches"][name] = {"stats": stats, "weights": weights}
-                added += 1
-        if added:
-            st.success(f"Loaded {added} archetype(s) into **your session**.")
-        else:
-            st.warning("No valid archetypes found in the JSON (unknown stat names or empty entries).")
-    except Exception as e:
-        st.error(f"Couldn't read JSON: {e}")
+    st.markdown("#### Load / Manage your archetype JSONs")
+    # Keep a tiny registry so we can undo collections later if needed
+    if "arch_collections" not in st.session_state:
+        st.session_state["arch_collections"] = []  # list[{"label": str, "names": [str,...]}]
+
+    default_label = st.session_state.get("last_arch_json_label", "My Archetypes v1")
+    label = st.text_input("Give this upload a label (for your reference)", value=default_label, key="arch_label_input")
+
+    up = st.file_uploader("Load custom archetypes (JSON)", type=["json"], key="upload_custom_arches_labeled")
+    if up is not None:
+        try:
+            data = json.load(up)
+            added = 0
+            added_names = []
+
+            for item in data.get("archetypes", []):
+                name = str(item.get("name", "")).strip()
+                if not name:
+                    continue
+                stats = [s for s in (item.get("stats") or []) if s in df_cols]
+                w_raw = item.get("weights") or {}
+                weights = {k: float(v) for k, v in w_raw.items() if k in stats}
+                if stats:
+                    # Load into THIS SESSION
+                    st.session_state["custom_arches"][name] = {"stats": stats, "weights": weights}
+                    added += 1
+                    added_names.append(name)
+
+            if added:
+                # Record collection
+                collection_label = label.strip() or default_label
+                st.session_state["last_arch_json_label"] = collection_label
+                st.session_state["arch_collections"].append({"label": collection_label, "names": added_names})
+                st.success(f"Loaded {added} archetype(s) into your session under label **{collection_label}**.")
+            else:
+                st.warning("No valid archetypes found in the JSON (unknown stat names or empty entries).")
+        except Exception as e:
+            st.error(f"Couldn't read JSON: {e}")
+
+    # Simple manager: list collections and optionally remove one (undo)
+    if st.session_state["arch_collections"]:
+        st.markdown("**Loaded collections (this session):**")
+        col_names = [c["label"] for c in st.session_state["arch_collections"]]
+        pick = st.selectbox("Select a collection to remove (optional)", options=["—"] + col_names, index=0, key="rm_arch_collection_pick")
+        if pick != "—":
+            if st.button("Remove selected collection from this session"):
+                # remove all archetypes in that collection from session
+                to_rm = next((c for c in st.session_state["arch_collections"] if c["label"] == pick), None)
+                if to_rm:
+                    for nm in to_rm["names"]:
+                        try:
+                            del st.session_state["custom_arches"][nm]
+                        except Exception:
+                            pass
+                    st.session_state["arch_collections"] = [c for c in st.session_state["arch_collections"] if c["label"] != pick]
+                    st.success(f"Removed collection **{pick}** from this session.")
+
 
 def stats_for_archetype(arch_name: str) -> list[str]:
     """Get stat list for either a built-in archetype or a user custom one."""
@@ -1058,17 +1132,28 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
     st.pyplot(fig, clear_figure=False)
     return fig
 
-def plot_role_leaderboard(df_filtered, role_name, role_stats, title_suffix: str = ""):
-    # Use fast cached series
+def plot_role_leaderboard(df_filtered_view, role_name, role_stats, title_suffix: str = ""):
+    """
+    Leaderboard:
+    - Compute RoleScore on the PRE–AGE pool (df_for_calc)
+    - Then merge those scores onto the visible/filtered view (df_filtered_view)
+    """
+    # 1) Compute once on the pre–age pool
+    df_calc = st.session_state.get("df_for_calc", df_filtered_view)
     try:
-        dfc = df_filtered.copy()
-        dfc['RoleScore'] = compute_role_scores_cached(dfc, role_name)
+        role_scores_all = compute_role_scores_cached(df_calc, role_name)
     except Exception:
-        dfc = df_filtered.copy()
-        dfc['RoleScore'] = [calculate_role_score(row, role_stats, dfc, role_name) for _, row in dfc.iterrows()]
+        # fallback (should rarely be needed)
+        role_scores_all = df_calc.apply(
+            lambda r: calculate_role_score(r, role_stats, df_calc, role_name), axis=1
+        )
 
-    top = dfc.nlargest(10, 'RoleScore').reset_index(drop=True)
+    # 2) Join scores to the visible view & select top 10 from what's visible
+    dfv = df_filtered_view.copy()
+    dfv = dfv.join(role_scores_all.rename("RoleScore"))  # align on index
+    top = dfv.dropna(subset=["RoleScore"]).nlargest(10, "RoleScore").reset_index(drop=True)
 
+    # 3) Plot (unchanged cosmetics)
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
                     "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
     bar_colors = pastel_blues[-len(top):][::-1]
@@ -1078,7 +1163,13 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats, title_suffix: str 
         return 0.299*r + 0.587*g + 0.114*b
     bar_text_colors = ['white' if lum(c) < 150 else '#222' for c in bar_colors]
 
-    labels = [f"{row['Player']} • {row['RoleScore']:.1f} • {int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • {row.get('Squad','?')} • {int(row.get('Mins',0)):,} mins" for _, row in top.iterrows()]
+    labels = [
+        f"{row['Player']} • {row['RoleScore']:.1f} • "
+        f"{int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • "
+        f"{row.get('Squad','?')} • {int(row.get('Mins',0)):,} mins"
+        for _, row in top.iterrows()
+    ]
+
     fig = go.Figure([
         go.Bar(
             x=top['RoleScore'],
@@ -1089,7 +1180,6 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats, title_suffix: str 
             insidetextanchor='middle',
             marker=dict(color=bar_colors, line=dict(color='#333', width=1)),
             textfont=dict(color=bar_text_colors, size=13, family=FONT_FAMILY),
-            customdata=top.index.values,
             hovertext=[f"{row['Player']} ({row['Squad']})" for _, row in top.iterrows()],
             hoverinfo="text"
         )
@@ -1106,6 +1196,7 @@ def plot_role_leaderboard(df_filtered, role_name, role_stats, title_suffix: str 
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
+
 
 def show_top_players_by_stat(df, tidy_label, stat_col, title_suffix: str = ""):
     top = df.nlargest(10, stat_col).reset_index(drop=True)
@@ -1220,6 +1311,43 @@ def style_scatter_axes(ax, title_text):
     for spine in ax.spines.values():
         spine.set_color("#000")
         spine.set_linewidth(1)
+
+def snapshot_custom_archetypes(include_session: bool = True,
+                               include_saved_disk: bool = True) -> dict:
+    """
+    Build the JSON payload for export.
+    - include_session: from st.session_state["custom_arches"]
+    - include_saved_disk: from ARCHETYPE_STORE file (if any)
+    """
+    out = []
+
+    if include_saved_disk:
+        try:
+            disk = load_archetype_store()  # {name: {"stats":[...], "weights":{...}}}
+            if isinstance(disk, dict):
+                for name, payload in disk.items():
+                    stats = [s for s in (payload.get("stats") or []) if isinstance(s, str)]
+                    weights = {k: float(v) for k, v in (payload.get("weights") or {}).items()
+                               if isinstance(k, str)}
+                    if stats:
+                        out.append({"name": name, "stats": stats, "weights": weights})
+        except Exception:
+            pass
+
+    if include_session:
+        sess = st.session_state.get("custom_arches", {})
+        if isinstance(sess, dict):
+            for name, payload in sess.items():
+                stats = [s for s in (payload.get("stats") or []) if isinstance(s, str)]
+                weights = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
+                if stats:
+                    out.append({"name": name, "stats": stats, "weights": weights})
+
+    # Deduplicate by name, keep last (session overrides disk)
+    dedup = {}
+    for item in out:
+        dedup[item["name"]] = item
+    return {"archetypes": list(dedup.values())}
 
 def pizza_fig_to_array(fig, dpi=220):
     buf = BytesIO()
@@ -1839,20 +1967,29 @@ elif mode == "6":
 elif mode == "7":
     st.subheader("Custom Archetype")
 
-    # One league filter for this mode
+    # First: choose leagues (for leaderboard preview/filter only)
     df_league = league_filter_ui(df)
 
-    # Available numeric stats
+    # ===== 1) LOAD / MANAGE JSONs FIRST =====
+    import_custom_archetypes_uploader(df_cols=set(df_league.columns))
+
+    st.divider()
+
+    # ===== 2) CREATE A NEW ARCHETYPE =====
+    st.markdown("### Create a new archetype")
+
+    # Available numeric stats (same rule as elsewhere)
     numeric_cols = [c for c in df_league.columns if pd.api.types.is_numeric_dtype(df_league[c]) and c not in ['Age','Mins']]
     if not numeric_cols:
         st.warning("No numeric stat columns found.")
     else:
         display_names = {c: stat_display_names.get(c, c) for c in numeric_cols}
 
-        # Name + stat selection (limit to 10)
+        # Name first (requested)
         name_default = st.session_state.get("custom_arch_name", "Custom Archetype")
         custom_name = st.text_input("Archetype name", value=name_default, key="custom_arch_name")
 
+        # Then pick stats
         picked_labels = st.multiselect("Pick up to 10 stats", [display_names[c] for c in numeric_cols])
         stat_cols = [c for c in numeric_cols if display_names[c] in picked_labels][:10]
         if len(picked_labels) > 10:
@@ -1883,8 +2020,15 @@ elif mode == "7":
             # ---- Export / Import ----
             st.divider()
             st.markdown("### Save / Load your custom archetypes")
-            export_custom_archetypes_button("Download my custom archetypes (JSON)")
-            import_custom_archetypes_uploader(df_cols=set(df_league.columns))
+            export_custom_archetypes_named(
+                label="Download my custom archetypes (JSON)",
+                default_name="my_archetypes",
+                include_session=True,        # export what was added this session
+                include_saved_disk=False,    # set True if you also want items from disk
+                show_preview=True
+            )
+
+            # (Uploader with label is at the top now)
 
             st.divider()
 
@@ -1910,7 +2054,6 @@ elif mode == "7":
                 for _, row in top.iterrows()
             ]
 
-            # Title mentions leagues if filtered (best-effort cosmetic)
             fig = go.Figure([
                 go.Bar(
                     x=top['CustomScore'],
@@ -1959,6 +2102,7 @@ elif mode == "7":
                 score = calculate_custom_archetype_score(target_row, stat_cols, df_league, weights)
                 st.metric(f"{target_row['Player']} — {custom_name}", f"{score:.2f}")
                 _ = show_percentile_bar_chart(target_row, stat_cols, df_league, custom_name)
+
 
 elif mode == "12":
     # Stat Scatter
