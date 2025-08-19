@@ -1572,7 +1572,7 @@ def dot_nav(mode_labels_to_keys, default_key):
         st.session_state["mode"] = default_key
     st.markdown("""
         <style>
-          .mode-label { font-size: 12px; line-height: 1.1; padding-left: .25rem; }
+          .mode-label { font-size: 10px; line-height: 1.1; padding-left: .25rem; }
           .mode-label.active { color:#1A78CF; font-weight:600; }
           .mode-label.inactive { color:#666; }
           div.dotbtn > div > button, .dotbtn button {
