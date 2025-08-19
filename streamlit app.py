@@ -35,6 +35,7 @@ import requests
 
 import json
 
+st.set_page_config(page_title="willumanalytics", layout="wide")
 
 # =========================
 # ====== CONFIG & DATA ====
@@ -399,8 +400,6 @@ def get_archetype_params_full() -> dict[str, list[str]]:
 # =========================
 # ======= UI HELPERS ======
 # =========================
-
-st.set_page_config(page_title="willumanalytics", layout="wide")
 
 @st.cache_data
 def load_csvs(base_folder: str, which: str):
