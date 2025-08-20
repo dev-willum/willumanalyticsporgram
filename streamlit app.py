@@ -68,6 +68,10 @@ font_bold   = _fontprops_or_fallback(GABARITO_BOLD_PATH)
 FONT_FAMILY = "Gabarito, DejaVu Sans, Arial, sans-serif"
 mpl.rcParams["font.family"] = ["Gabarito", "DejaVu Sans", "Arial", "sans-serif"]
 
+if "custom_metrics" not in st.session_state:
+    # { name: {"a": "statA", "op": "+", "b": "statB", "color": "#RRGGBB"} }
+    st.session_state["custom_metrics"] = {}
+
 
 st.markdown("""
 <style>
@@ -334,6 +338,28 @@ archetype_params = {role: list(weights.keys()) for role, weights in position_wei
 category_archetypes = {f"{cat} Pizza": stats for cat, stats in pizza_plot_categories.items()}
 BASE_ARCHETYPES = {**archetype_params, **category_archetypes}
 
+# Which stats should be interpreted as "lower is better"
+LESS_IS_BETTER: dict[str, bool] = {}
+
+def _lib_map() -> dict[str, bool]:
+    merged = dict(LESS_IS_BETTER)
+    sess = st.session_state.get("LESS_IS_BETTER", {})
+    if isinstance(sess, dict):
+        merged.update({str(k): bool(v) for k, v in sess.items()})
+    return merged
+
+def set_less_is_better(stat: str, flag: bool) -> None:
+    LESS_IS_BETTER[stat] = bool(flag)
+    st.session_state.setdefault("LESS_IS_BETTER", {})
+    st.session_state["LESS_IS_BETTER"][stat] = bool(flag)
+
+def is_less_better(stat: str) -> bool:
+    return bool(_lib_map().get(stat, False))
+
+def dir_adjust_series(series: pd.Series, stat: str) -> pd.Series:
+    s = pd.to_numeric(series, errors='coerce')
+    return -s if is_less_better(stat) else s
+
 
 # ---------- Custom Archetype Persistence ----------
 ARCHETYPE_STORE = os.path.join(APP_DIR, "custom_archetypes.json")
@@ -491,22 +517,148 @@ def filter_by_minutes(df, min_minutes):
     df['Mins'] = pd.to_numeric(df['Mins'].astype(str).str.replace(',', ''), errors='coerce')
     return df[df['Mins'] >= min_minutes]
 
+# ---------- Custom Metrics (as stats) ----------
+
+VALID_OPS = {"+", "-", "*", "/"}
+
+def _safe_two_col_op(ser_a: pd.Series, ser_b: pd.Series, op: str) -> pd.Series:
+    a = pd.to_numeric(ser_a, errors="coerce")
+    b = pd.to_numeric(ser_b, errors="coerce")
+    if op == "+": out = a + b
+    elif op == "-": out = a - b
+    elif op == "*": out = a * b
+    elif op == "/":
+        # avoid div-by-zero -> NaN
+        out = a / b.replace(0, np.nan)
+    else:
+        out = pd.Series(np.nan, index=a.index)
+    return out.replace([np.inf, -np.inf], np.nan)
+
+def apply_custom_metrics_to_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds/updates columns for every custom metric stored in session.
+    Accepts either {"a","op","b","color","less_is_better"} or legacy {"formula": "A ÷ B"}.
+    Also updates the color map and the lower-is-better flag. Caps to 2dp.
+    """
+    if not st.session_state.get("custom_metrics"):
+        return df
+
+    df = df.copy()
+
+    def _compute(a, b, op):
+        sa = pd.to_numeric(df.get(a), errors="coerce")
+        sb = pd.to_numeric(df.get(b), errors="coerce")
+        if op in {"/", "÷"}:
+            out = sa / sb.replace(0, np.nan)
+        elif op in {"*", "×"}:
+            out = sa * sb
+        elif op == "+":
+            out = sa + sb
+        elif op == "-":
+            out = sa - sb
+        else:
+            out = pd.Series(np.nan, index=df.index)
+        return out.replace([np.inf, -np.inf], np.nan).round(2)
+
+    for name, cfg in st.session_state["custom_metrics"].items():
+        col = str(name).strip()
+        a = cfg.get("a"); b = cfg.get("b"); op = cfg.get("op")
+        color = cfg.get("color", "#2E4374")
+        lib = bool(cfg.get("less_is_better", False))
+
+        # legacy support: "formula": "A ÷ B"
+        if (not a or not b or op not in {"+","-","*","×","/","÷"}) and isinstance(cfg.get("formula"), str):
+            try:
+                parts = cfg["formula"].replace("*","×").replace("/","÷").split()
+                if len(parts) == 3:
+                    a, op, b = parts
+            except Exception:
+                a = b = op = None
+
+        if not a or not b or op not in {"+","-","*","×","/","÷"}:
+            continue
+        if a not in df.columns or b not in df.columns:
+            continue
+
+        df[col] = _compute(a, b, op)
+        category_by_param[col] = color
+        set_less_is_better(col, lib)
+
+    return df
+
+
+def export_custom_metrics_payload(include_session=True) -> dict:
+    """
+    JSON schema:
+    { "metrics": [ { "name": str, "a": str, "op": "+|-|*|/|×|÷", "b": str, "color": "#hex", "less_is_better": bool }, ... ] }
+    """
+    metrics = []
+    if include_session:
+        for name, cfg in (st.session_state.get("custom_metrics") or {}).items():
+            metrics.append({
+                "name": name,
+                "a": cfg.get("a", ""),
+                "op": cfg.get("op", "+"),
+                "b": cfg.get("b", ""),
+                "color": cfg.get("color", "#2E4374"),
+                "less_is_better": bool(cfg.get("less_is_better", False)),
+            })
+    return {"metrics": metrics}
+
+def import_custom_metrics_from_json(file, df_cols: set[str]) -> int:
+    """
+    Reads JSON of the schema above and merges valid metrics into session.
+    Returns how many metrics were loaded. Registers color + LIB flag.
+    """
+    try:
+        data = json.load(file)
+    except Exception as e:
+        st.error(f"Couldn't read metrics JSON: {e}")
+        return 0
+
+    added = 0
+    for item in data.get("metrics", []):
+        name = str(item.get("name", "")).strip()
+        a = item.get("a"); b = item.get("b"); op = item.get("op", "+")
+        color = item.get("color", "#2E4374")
+        lib = bool(item.get("less_is_better", False))
+        if not name or op not in {"+","-","*","×","/","÷"} or a not in df_cols or b not in df_cols:
+            continue
+        st.session_state["custom_metrics"][name] = {"a": a, "op": op, "b": b, "color": color, "less_is_better": lib}
+        category_by_param[name] = color
+        set_less_is_better(name, lib)
+        added += 1
+    return added
+
+
+
+
 def position_relative_percentile(df, player_row, stat_col):
     pos_str = player_row.get('Pos', ' ')
     positions = [p.strip() for p in str(pos_str).split(',') if p.strip()]
     if not positions or stat_col not in df.columns:
         return np.nan
+
     mask = df['Pos'].apply(
         lambda s: any(pos in str(s).split(',') for pos in positions) if isinstance(s, str) else False
     )
     position_df = df[mask]
+
     if stat_col not in position_df.columns:
         return np.nan
-    stat_vals = position_df[stat_col].replace([np.inf, -np.inf], np.nan).dropna()
-    player_val = player_row.get(stat_col, np.nan)
-    if pd.isnull(player_val) or stat_vals.empty:
+
+    # Direction-aware series (flip if lower is better)
+    series = pd.to_numeric(position_df[stat_col], errors='coerce').replace([np.inf, -np.inf], np.nan)
+    series_adj = dir_adjust_series(series, stat_col)
+
+    player_val = pd.to_numeric(player_row.get(stat_col, np.nan), errors='coerce')
+    if pd.isnull(player_val) or series_adj.dropna().empty:
         return np.nan
-    return round(stats.percentileofscore(stat_vals, player_val, kind='mean'), 2)
+
+    player_val_adj = -player_val if is_less_better(stat_col) else player_val
+
+    return round(stats.percentileofscore(series_adj.dropna(), player_val_adj, kind='mean'), 2)
+
 
 def calculate_role_score(player_row, role_stats, df, role_name=None):
     if not role_stats:
@@ -806,18 +958,19 @@ def _compute_percentiles_table(dfin: pd.DataFrame, selected_stats: list[str], ba
     pct_df = pd.DataFrame(index=dfin.index)
 
     if baseline == "global":
-        # Vectorized: rank-average / count * 100
         for s in selected_stats:
             if s not in dfin.columns:
                 continue
-            series = dfin[s]
-            n = series.notna().sum()
+            series = pd.to_numeric(dfin[s], errors='coerce').replace([np.inf, -np.inf], np.nan)
+            series_adj = dir_adjust_series(series, s)
+            n = series_adj.notna().sum()
             if n == 0:
                 pct_df[f"pct_{s}"] = np.nan
                 continue
-            ranks = series.rank(method="average", na_option="keep")
+            ranks = series_adj.rank(method="average", na_option="keep")
             pct_df[f"pct_{s}"] = (ranks / n) * 100.0
         return pct_df
+
 
     # baseline == "positional" (row-wise, fallback if needed by callers)
     for idx, row in dfin.iterrows():
@@ -862,12 +1015,14 @@ def _precompute_positional_percentiles(df: pd.DataFrame, stats_needed: tuple[str
         for s in stats_needed:
             if s not in dfx.columns:
                 continue
-            series = dfx.loc[mask, s]
-            n = series.notna().sum()
+            series = pd.to_numeric(dfx.loc[mask, s], errors='coerce').replace([np.inf, -np.inf], np.nan)
+            series_adj = dir_adjust_series(series, s)
+            n = series_adj.notna().sum()
             if n == 0:
                 continue
-            ranks = series.rank(method="average", na_option="keep")
+            ranks = series_adj.rank(method="average", na_option="keep")
             pcts = (ranks / n) * 100.0
+
 
             # assign only to rows in this exact signature group
             idx_here = series.index.intersection(idx)
@@ -1047,6 +1202,10 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
     raw_vals = [player_row.get(s, float('nan')) for s in stat_cols]
     # Global -> (optional) positional
     pcts = _player_pcts_global_then_positional(df_filtered, player_row, stat_cols)
+    # Cap displayed values/percentiles to 2dp for consistent labelling
+    raw_vals = [None if pd.isna(v) else float(f"{float(v):.2f}") for v in raw_vals]
+    pcts     = [0.0 if pd.isna(p) else float(f"{float(p):.2f}") for p in pcts]
+
 
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
     text_colors = [get_contrast_text_color(c) for c in slice_colors]
@@ -1199,7 +1358,12 @@ def plot_role_leaderboard(df_filtered_view, role_name, role_stats, title_suffix:
 
 
 def show_top_players_by_stat(df, tidy_label, stat_col, title_suffix: str = ""):
-    top = df.nlargest(10, stat_col).reset_index(drop=True)
+    # pick order by LIB flag
+    if is_less_better(stat_col):
+        top = df.nsmallest(10, stat_col).reset_index(drop=True)
+    else:
+        top = df.nlargest(10, stat_col).reset_index(drop=True)
+
     pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
                     "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
     bar_colors = pastel_blues[-len(top):][::-1]
@@ -1208,29 +1372,51 @@ def show_top_players_by_stat(df, tidy_label, stat_col, title_suffix: str = ""):
         r,g,b = [x*255 for x in mcolors.hex2color(c)]
         return 0.299*r + 0.587*g + 0.114*b
     bar_text_colors = ['white' if lum(c) < 150 else '#222' for c in bar_colors]
-    labels = [f"{row['Player']} • {row.get(stat_col,0):.2f} • {int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • {row.get('Squad','?')} • {int(row.get('Mins',0)):,} mins" for _, row in top.iterrows()]
 
+    def _fmt(v):
+        try: return f"{float(v):.2f}"
+        except Exception: return "—"
+
+    labels = [
+        f"{row['Player']} • {_fmt(row[stat_col])} • "
+        f"{int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • "
+        f"{row.get('Squad','?')} • {int(pd.to_numeric(row.get('Mins',0), errors='coerce') or 0):,} mins"
+        for _, row in top.iterrows()
+    ]
+
+    # 🔑 use raw metric values for plotting (always positive, left-to-right)
     fig = go.Figure([
         go.Bar(
-            x=top[stat_col], y=[f"#{i+1}" for i in range(len(top))], orientation='h',
-            text=labels, textposition='inside', insidetextanchor='middle',
+            x=top[stat_col],
+            y=[f"#{i+1}" for i in range(len(top))],
+            orientation='h',
+            text=labels,
+            textposition='inside',
+            insidetextanchor='middle',
             marker=dict(color=bar_colors, line=dict(color='#333', width=1)),
             textfont=dict(color=bar_text_colors, size=13, family=FONT_FAMILY),
-            hovertext=[f"{row['Player']} ({row['Squad']})" for _, row in top.iterrows()],
+            hovertext=[f"{row['Player']} ({row.get('Squad','?')})" for _, row in top.iterrows()],
             hoverinfo="text"
         )
     ])
-    title_txt = _with_pos_filter(f"Top 10: {tidy_label}{title_suffix}")
+
+    dir_note = " (lower is better)" if is_less_better(stat_col) else ""
+    title_txt = _with_pos_filter(f"Top 10: {tidy_label}{dir_note}{title_suffix}")
     fig.update_layout(
         title=dict(text=title_txt, font=dict(color="#000", family=FONT_FAMILY)),
         plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
-        xaxis=dict(title=tidy_label, gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
-        yaxis=dict(autorange='reversed', showgrid=False, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
-        margin=dict(l=120, r=40, t=60, b=40), height=600, width=None,
+        xaxis=dict(title=tidy_label, gridcolor=POSTER_BG,
+                   color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+        yaxis=dict(autorange='reversed', showgrid=False,
+                   color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+        margin=dict(l=120, r=40, t=60, b=40), height=600,
     )
     apply_hover_style(fig)
     st.plotly_chart(fig, use_container_width=True, theme=None)
     return top, fig
+
+
+
 
 def plot_similarity_and_select(df_filtered, player_row, stat_cols, role_name):
     X = df_filtered[stat_cols].fillna(0)
@@ -1364,6 +1550,10 @@ def build_pizza_figure(
     raw_vals = [player_row.get(s, float('nan')) for s in stat_cols]
     # Global -> (optional) positional
     pcts = _player_pcts_global_then_positional(df, player_row, stat_cols)
+    # Cap displayed values/percentiles to 2dp for consistent labelling
+    raw_vals = [None if pd.isna(v) else float(f"{float(v):.2f}") for v in raw_vals]
+    pcts     = [0.0 if pd.isna(p) else float(f"{float(p):.2f}") for p in pcts]
+
 
     slice_colors = [category_by_param.get(s, "#2E4374") for s in stat_cols]
     text_colors  = [get_contrast_text_color(c) for c in slice_colors]
@@ -1565,6 +1755,7 @@ MODE_ITEMS = [
     ("Player Finder", "14"),
     ("Glossary / Help", "15"),
     ("Head-to-Head Radar", "16"),
+    ("Create your own metric", "17"),
 ]
 
 def dot_nav(mode_labels_to_keys, default_key):
@@ -1641,6 +1832,7 @@ db_choice = st.sidebar.selectbox(
 
 # Load the raw dataset for this season+database choice
 df = load_csvs(BASE, db_choice)
+df = apply_custom_metrics_to_df(df)
 
 st.sidebar.write("Available positions: GK, DF, MF, FW")
 
@@ -2427,3 +2619,240 @@ elif mode == "16":
                 file_name=f"h2h_{pA_name.replace(' ','_')}_vs_{pB_name.replace(' ','_')}_{role_name.replace(' ','_')}.csv",
                 mime="text/csv"
             )
+elif mode == "17":
+    st.subheader("Create Your Own Metric")
+
+    # Use league filter only for preview; compute on the pre-age pool for consistency
+    df_preview = league_filter_ui(df)
+    df_calc = st.session_state.get("df_for_calc", df_preview)
+
+    # Available numeric stats
+    numeric_cols = [
+        c for c in df_preview.columns
+        if pd.api.types.is_numeric_dtype(df_preview[c]) and c not in ["Age", "Mins"]
+    ]
+    display_names = {c: stat_display_names.get(c, c) for c in numeric_cols}
+
+    if not numeric_cols:
+        st.warning("No numeric stat columns available.")
+        st.stop()
+
+    # --- Operand pickers
+    cA, cB = st.columns(2)
+    with cA:
+        stat_a_lbl = st.selectbox("Stat A", [display_names[c] for c in numeric_cols], key="m17_a")
+    with cB:
+        stat_b_lbl = st.selectbox("Stat B", [display_names[c] for c in numeric_cols], key="m17_b")
+
+    # Map labels back to column names
+    stat_a = [c for c in numeric_cols if display_names[c] == stat_a_lbl][0]
+    stat_b = [c for c in numeric_cols if display_names[c] == stat_b_lbl][0]
+
+    # Operation (pretty symbol for UI, plain symbol for compute/session)
+    op_pretty = st.selectbox("Operation", ["+", "−", "×", "÷"], index=3, key="m17_op")
+    OP_TO_COMPUTE = {"+": "+", "−": "-", "×": "*", "÷": "/"}
+    OP_TO_PRETTY  = {"+": "+", "-": "−", "*": "×", "/": "÷"}
+    op_compute = OP_TO_COMPUTE[op_pretty]    # for math
+    op_symbol  = OP_TO_PRETTY[op_compute]    # for naming/export
+
+    # --- Name, color, direction
+    n1, n2, n3 = st.columns([2, 1, 2])
+    default_name = f"{display_names[stat_a]} {op_symbol} {display_names[stat_b]}"
+    with n1:
+        metric_name = st.text_input("Metric name", value=default_name, key="m17_name").strip()
+    with n2:
+        color_pick = st.color_picker("Pie slice color", value="#1A78CF", key="m17_color")
+    with n3:
+        less_is_better = st.toggle("Lower is better", value=False,
+                                   help="When on, rankings & percentiles treat smaller values as better.")
+
+    # --- Compute series ONCE on df_calc
+    serA = pd.to_numeric(df_calc[stat_a], errors="coerce")
+    serB = pd.to_numeric(df_calc[stat_b], errors="coerce")
+    metric_series = _safe_two_col_op(serA, serB, op_compute).round(2)  # cap to 2dp right here
+
+    # ---- Preview (bars always left→right; #1 at top)
+    st.markdown("### Preview")
+    if metric_series.notna().sum() == 0:
+        st.info("This metric produced no valid values (division by zero or missing data).")
+    else:
+        topN = st.slider("Show top N", 10, 50, 10, step=5, key="m17_topn")
+
+        df_show = df_calc.copy()
+        df_show["__metric__"] = metric_series
+
+        # natural ranking based on direction
+        top = (df_show.dropna(subset=["__metric__"])
+                      .nsmallest(topN, "__metric__") if less_is_better
+               else df_show.dropna(subset=["__metric__"]).nlargest(topN, "__metric__"))
+        top = top.reset_index(drop=True)
+
+        labels = [
+            f"{row['Player']} • {row['__metric__']:.2f} • "
+            f"{int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • "
+            f"{row.get('Squad','?')} • {int(pd.to_numeric(row.get('Mins',0), errors='coerce') or 0):,} mins"
+            for _, row in top.iterrows()
+        ]
+
+        pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
+                        "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
+        bar_colors = pastel_blues[-len(top):][::-1]
+
+        def _lum(hx):
+            r,g,b = [x*255 for x in mcolors.hex2color(hx)]
+            return 0.299*r + 0.587*g + 0.114*b
+        bar_text_colors = ["white" if _lum(c) < 150 else "#222" for c in bar_colors]
+
+        axis_name = metric_name or f"{display_names.get(stat_a, stat_a)} {op_symbol} {display_names.get(stat_b, stat_b)}"
+        title_suffix = " (lower is better)" if less_is_better else " (higher is better)"
+
+        fig = go.Figure([
+            go.Bar(
+                x=top["__metric__"],  # positive -> left→right
+                y=[f"#{i+1}" for i in range(len(top))],
+                orientation="h",
+                text=labels,
+                textposition="inside",
+                insidetextanchor="middle",
+                marker=dict(color=bar_colors, line=dict(color="#333", width=1)),
+                textfont=dict(color=bar_text_colors, size=13, family=FONT_FAMILY),
+                hovertext=[f"{row['Player']} ({row.get('Squad','?')})" for _, row in top.iterrows()],
+                hoverinfo="text"
+            )
+        ])
+        fig.update_layout(
+            title=dict(text=_with_pos_filter(f"Top 10: {axis_name}{title_suffix}"),
+                       font=dict(color="#000", family=FONT_FAMILY)),
+            plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
+            xaxis=dict(title=axis_name, gridcolor=POSTER_BG, color="#000",
+                       tickfont=dict(color="#000"), linecolor="#000"),
+            yaxis=dict(autorange="reversed", showgrid=False, color="#000",
+                       tickfont=dict(color="#000"), linecolor="#000"),
+            margin=dict(l=120, r=40, t=60, b=40),
+            height=520, template="simple_white"
+        )
+        apply_hover_style(fig)
+        st.plotly_chart(fig, use_container_width=True, theme=None)
+
+    st.divider()
+
+    # --- Save / Export / Import
+    b1, b2, _ = st.columns([1, 1, 2])
+    with b1:
+        save_clicked = st.button("➕ Save metric", type="primary", key="m17_save")
+    with b2:
+        export_clicked = st.button("Export metrics JSON", key="m17_export")
+
+    up = st.file_uploader("Import metrics JSON", type=["json"], key="m17_import")
+
+    # Save metric into dataframes + global registries
+    if save_clicked:
+        if not metric_name:
+            st.error("Please enter a metric name.")
+        elif metric_name in df_calc.columns:
+            st.error("A column with that name already exists. Choose another name.")
+        else:
+            # 1) write the column (2 dp) into both calc & visible copies
+            st.session_state["df_for_calc"][metric_name] = metric_series
+            # also reflect into current visible df if player filters are active
+            try:
+                df[metric_name] = metric_series.reindex(df.index)
+            except Exception:
+                pass
+
+            # 2) register color and direction
+            category_by_param[metric_name] = color_pick
+            LESS_IS_BETTER[metric_name] = bool(less_is_better)
+
+            # 3) store definition for export and re-load later
+            if "custom_metrics" not in st.session_state:
+                st.session_state["custom_metrics"] = {}
+            st.session_state["custom_metrics"][metric_name] = {
+                "a": stat_a, "op": op_compute, "b": stat_b,
+                "color": color_pick, "less_is_better": bool(less_is_better)
+            }
+
+            st.success(f"Saved metric **{metric_name}**. It’s now usable everywhere (pizzas, leaders, customs).")
+
+    # Export
+    if export_clicked:
+        payload = {
+            "metrics": [
+                {
+                    "name": name,
+                    "a": d.get("a", ""),
+                    "op": d.get("op", "+"),
+                    "b": d.get("b", ""),
+                    "color": d.get("color", "#1A78CF"),
+                    "less_is_better": bool(d.get("less_is_better", False))
+                }
+                for name, d in (st.session_state.get("custom_metrics") or {}).items()
+            ]
+        }
+        st.download_button(
+            "Download metrics.json",
+            data=json.dumps(payload, indent=2).encode("utf-8"),
+            file_name="metrics.json",
+            mime="application/json",
+            key="m17_export_dl2"
+        )
+
+    # Import
+    if up is not None:
+        try:
+            data = json.load(up)
+            added = 0
+            for item in data.get("metrics", []):
+                name   = str(item.get("name", "")).strip()
+                a_col  = item.get("a")
+                b_col  = item.get("b")
+                op_in  = item.get("op", "+")
+                color  = str(item.get("color", "#1A78CF")) or "#1A78CF"
+                lib    = bool(item.get("less_is_better", False))
+
+                if not name or a_col not in df_calc.columns or b_col not in df_calc.columns:
+                    continue
+                if op_in not in {"+", "-", "*", "/"}:
+                    continue
+
+                sA = pd.to_numeric(df_calc[a_col], errors="coerce")
+                sB = pd.to_numeric(df_calc[b_col], errors="coerce")
+                s_imp = _safe_two_col_op(sA, sB, op_in).round(2)
+
+                # Avoid name collisions by suffixing
+                final_name = name
+                if final_name in df_calc.columns:
+                    base = re.sub(r"[^\w\-]+", "_", final_name).strip("_") or "Metric"
+                    k = 2
+                    while f"{base}_{k}" in df_calc.columns:
+                        k += 1
+                    final_name = f"{base}_{k}"
+
+                # Install column
+                st.session_state["df_for_calc"][final_name] = s_imp
+                try:
+                    df[final_name] = s_imp.reindex(df.index)
+                except Exception:
+                    pass
+
+                # Register style + direction
+                category_by_param[final_name] = color
+                LESS_IS_BETTER[final_name] = lib
+
+                # Persist definition (so further exports include it)
+                if "custom_metrics" not in st.session_state:
+                    st.session_state["custom_metrics"] = {}
+                st.session_state["custom_metrics"][final_name] = {
+                    "a": a_col, "op": op_in, "b": b_col,
+                    "color": color, "less_is_better": lib
+                }
+                added += 1
+
+            if added:
+                st.success(f"Imported {added} metric(s). They now behave like native stats (direction & color included).")
+            else:
+                st.warning("No valid metrics found (unknown columns or bad format).")
+        except Exception as e:
+            st.error(f"Couldn't read metrics JSON: {e}")
+
+
