@@ -137,7 +137,7 @@ position_groups = {
 }
 
 pizza_plot_categories = {
-    "Passing": ["compPass/90", "attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90","pAdjprogPasses/90","pAdjxAG/90"],
+    "Passing": ["compPass/90", "compCross/90","attPass/90", "pass%", "progPasses/90", "thirdPasses/90", "PPA/90", "xA/90", "kp/90", "xAG/90", "tb/90","pAdjprogPasses/90","pAdjxAG/90"],
     "Defending": ["tackles/90", "Tkl+Int/90", "interceptions/90", "pAdjtacklesWon/90", "pAdjinterceptions/90", "clearances/90", "dribbledPast/90", "Blocked/90", "errors/90", "shotsBlocked/90", "passesBlocked/90", "tackleSuccessRate", "ballRecoveries/90", "midThirdTackles/90","pAdjclearances/90","pAdjshotsBlocked/90","pAdjtackles/90"],
     "Carrying": ["progCarries/90", "thirdCarries/90", "Carries/90", "takeOnsAtt/90", "Succ/90", "att3rdTouches/90", "fouled/90","pAdjprogCarries/90","pAdjtouches/90"],
     "Shooting": ["goals/90", "Sh/90", "SoT/90", "npg/90", "xG/90", "SoT%", "G/SoT", "goals", "xGOP/90", "G/Sh","pAdjxG/90","Distance"],
@@ -897,11 +897,17 @@ def import_custom_archetypes_uploader(df_cols: set[str]):
     Tracks collections so they can be removed as a group.
     """
     st.markdown("#### Load / Manage your archetype JSONs")
+
+    # one place to track uploaded collections for this session
     if "arch_collections" not in st.session_state:
         st.session_state["arch_collections"] = []  # list[{"label": str, "names": [str,...]}]
 
     default_label = st.session_state.get("last_arch_json_label", "My Archetypes v1")
-    label = st.text_input("Give this upload a label (for your reference)", value=default_label, key="arch_label_input")
+    label = st.text_input(
+        "Give this upload a label (for your reference)",
+        value=default_label,
+        key="arch_label_input"
+    )
 
     up = st.file_uploader("Load custom archetypes (JSON)", type=["json"], key="upload_custom_arches_labeled")
     if up is not None:
@@ -914,6 +920,7 @@ def import_custom_archetypes_uploader(df_cols: set[str]):
                 name = str(item.get("name", "")).strip()
                 if not name:
                     continue
+
                 stats = [s for s in (item.get("stats") or []) if s in df_cols]
                 w_raw = item.get("weights") or {}
                 weights = {k: float(v) for k, v in w_raw.items() if k in stats}
@@ -921,6 +928,7 @@ def import_custom_archetypes_uploader(df_cols: set[str]):
                 grp = grp if isinstance(grp, str) and grp in VALID_ARCH_GROUPS else None
 
                 if stats:
+                    st.session_state.setdefault("custom_arches", {})
                     st.session_state["custom_arches"][name] = {"stats": stats, "weights": weights}
                     if grp:
                         st.session_state["custom_arches"][name]["group"] = grp
@@ -928,7 +936,7 @@ def import_custom_archetypes_uploader(df_cols: set[str]):
                     added_names.append(name)
 
             if added:
-                collection_label = label.strip() or default_label
+                collection_label = (label or default_label).strip() or default_label
                 st.session_state["last_arch_json_label"] = collection_label
                 st.session_state["arch_collections"].append({"label": collection_label, "names": added_names})
                 st.success(f"Loaded {added} archetype(s) under label **{collection_label}**.")
@@ -937,39 +945,25 @@ def import_custom_archetypes_uploader(df_cols: set[str]):
         except Exception as e:
             st.error(f"Couldn't read JSON: {e}")
 
+    # ---- Manager (single instance; unique keys) ----
     if st.session_state["arch_collections"]:
         st.markdown("**Loaded collections (this session):**")
         col_names = [c["label"] for c in st.session_state["arch_collections"]]
-        pick = st.selectbox("Select a collection to remove (optional)", options=["—"] + col_names, index=0, key="rm_arch_collection_pick")
+        pick = st.selectbox(
+            "Select a collection to remove (optional)",
+            options=["—"] + col_names,
+            index=0,
+            key="rm_arch_collection_pick"  # only used once now
+        )
         if pick != "—":
-            if st.button("Remove selected collection from this session"):
+            if st.button("Remove selected collection from this session", key="rm_arch_collection_btn"):
                 to_rm = next((c for c in st.session_state["arch_collections"] if c["label"] == pick), None)
                 if to_rm:
                     for nm in to_rm["names"]:
-                        try:
-                            del st.session_state["custom_arches"][nm]
-                        except Exception:
-                            pass
-                    st.session_state["arch_collections"] = [c for c in st.session_state["arch_collections"] if c["label"] != pick]
-                    st.success(f"Removed collection **{pick}** from this session.")
-
-
-    # Simple manager: list collections and optionally remove one (undo)
-    if st.session_state["arch_collections"]:
-        st.markdown("**Loaded collections (this session):**")
-        col_names = [c["label"] for c in st.session_state["arch_collections"]]
-        pick = st.selectbox("Select a collection to remove (optional)", options=["—"] + col_names, index=0, key="rm_arch_collection_pick")
-        if pick != "—":
-            if st.button("Remove selected collection from this session"):
-                # remove all archetypes in that collection from session
-                to_rm = next((c for c in st.session_state["arch_collections"] if c["label"] == pick), None)
-                if to_rm:
-                    for nm in to_rm["names"]:
-                        try:
-                            del st.session_state["custom_arches"][nm]
-                        except Exception:
-                            pass
-                    st.session_state["arch_collections"] = [c for c in st.session_state["arch_collections"] if c["label"] != pick]
+                        st.session_state.get("custom_arches", {}).pop(nm, None)
+                    st.session_state["arch_collections"] = [
+                        c for c in st.session_state["arch_collections"] if c["label"] != pick
+                    ]
                     st.success(f"Removed collection **{pick}** from this session.")
 
 
@@ -1282,7 +1276,7 @@ def show_pizza(player_row, stat_cols, df_filtered, role_name, lightmode=False, t
         kwargs_params=dict(color=param_color, fontsize=13, fontproperties=font_normal, va="center"),
         kwargs_values=dict(
             color="#222222" if lightmode else "#fffff0",
-            fontsize=12, fontproperties=font_normal, zorder=3,
+            fontsize=10, fontproperties=font_normal, zorder=3,
             bbox=dict(edgecolor="#000000", facecolor="cornflowerblue", boxstyle="round,pad=0.2", lw=1)
         )
     )
@@ -2823,7 +2817,7 @@ elif mode == "17":
         bar_text_colors = ["white" if _lum(c) < 150 else "#222" for c in bar_colors]
 
         axis_name = metric_name or f"{display_names.get(stat_a, stat_a)} {op_symbol} {display_names.get(stat_b, stat_b)}"
-        title_suffix = " (lower is better)" if less_is_better else " (higher is better)"
+        title_suffix = " (lower is better)" if less_is_better else ""
 
         fig = go.Figure([
             go.Bar(
