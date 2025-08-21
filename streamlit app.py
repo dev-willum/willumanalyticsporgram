@@ -50,6 +50,11 @@ GABARITO_BOLD_PATH = os.path.join(APP_DIR, "fonts", "Gabarito-Bold.ttf")
 if "custom_arches" not in st.session_state:
     st.session_state["custom_arches"] = {}
 
+
+ARCHETYPE_GROUPS: dict[str, str] = {}  # { archetype_name: "GK"|"DF"|"MF"|"FW" }
+VALID_ARCH_GROUPS = {"GK", "DF", "MF", "FW"}
+
+
 def _fontprops_or_fallback(ttf_path: str, fallback_family: str = "DejaVu Sans"):
     try:
         if os.path.isfile(ttf_path):
@@ -389,12 +394,16 @@ def write_archetype_store(store: dict) -> None:
 def get_archetype_params_full() -> dict[str, list[str]]:
     """
     Single source of truth:
-    - Start with BASE_ARCHETYPES (weighted roles + category pizzas)
+    - Start with BASE_ARCHETYPES (weighted roles + category pizzas) -> no group by default
     - Merge persisted customs from file (suffix ' (Saved)' on name collision)
     - Merge session customs from st.session_state['custom_arches'] (override or add)
     Also merges custom weights into position_weights so scoring works everywhere.
+    Additionally fills ARCHETYPE_GROUPS[name] with "GK"/"DF"/"MF"/"FW" if provided (for customs).
     """
     arch = dict(BASE_ARCHETYPES)
+
+    # Clear and rebuild the group map every time
+    ARCHETYPE_GROUPS.clear()
 
     # 1) From disk
     store = load_archetype_store()
@@ -404,9 +413,16 @@ def get_archetype_params_full() -> dict[str, list[str]]:
             continue
         final_name = name if name not in arch else f"{name} (Saved)"
         arch[final_name] = stats
+
+        # bring in optional weights
         wmap = {k: float(v) for k, v in (payload.get("weights") or {}).items() if isinstance(k, str)}
         if wmap:
             position_weights[final_name] = wmap  # add/override weights for this custom role
+
+        # NEW: bring in optional group
+        grp = payload.get("group")
+        if isinstance(grp, str) and grp in VALID_ARCH_GROUPS:
+            ARCHETYPE_GROUPS[final_name] = grp
 
     # 2) From this session
     sess = st.session_state.get("custom_arches", {})
@@ -416,11 +432,19 @@ def get_archetype_params_full() -> dict[str, list[str]]:
             if not stats:
                 continue
             arch[name] = stats  # session overrides any same-name
+
+            # weights (optional)
             wmap = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
             if wmap:
                 position_weights[name] = wmap
 
+            # NEW: session group
+            grp = payload.get("group")
+            if isinstance(grp, str) and grp in VALID_ARCH_GROUPS:
+                ARCHETYPE_GROUPS[name] = grp
+
     return arch
+
 
 
 # =========================
@@ -842,17 +866,20 @@ def set_mode(new_mode: str):
     st.session_state["mode"] = new_mode
 
 def _custom_arch_json_payload() -> dict:
-    """Return a JSON-serializable snapshot of this user's custom archetypes (from session)."""
+    """Snapshot of this user's session custom archetypes (with group)."""
     arches = st.session_state.get("custom_arches", {})
     return {
         "archetypes": [
-            {"name": name,
-             "stats": data.get("stats", []),
-             "weights": {k: float(v) for k, v in (data.get("weights", {}) or {}).items()}
+            {
+                "name": name,
+                "stats": data.get("stats", []),
+                "weights": {k: float(v) for k, v in (data.get("weights", {}) or {}).items()},
+                "group": data.get("group") if data.get("group") in VALID_ARCH_GROUPS else None,
             }
             for name, data in arches.items()
         ]
     }
+
 
 def export_custom_archetypes_button(label="Download my custom archetypes (JSON)"):
     payload = _custom_arch_json_payload()
@@ -866,12 +893,10 @@ def export_custom_archetypes_button(label="Download my custom archetypes (JSON)"
 
 def import_custom_archetypes_uploader(df_cols: set[str]):
     """
-    Upload custom archetypes JSON *first* and give the upload a label.
-    Merges valid archetypes into this session (st.session_state['custom_arches']).
+    Upload custom archetypes JSON and merge into this session (preserving 'group' if provided).
     Tracks collections so they can be removed as a group.
     """
     st.markdown("#### Load / Manage your archetype JSONs")
-    # Keep a tiny registry so we can undo collections later if needed
     if "arch_collections" not in st.session_state:
         st.session_state["arch_collections"] = []  # list[{"label": str, "names": [str,...]}]
 
@@ -892,22 +917,42 @@ def import_custom_archetypes_uploader(df_cols: set[str]):
                 stats = [s for s in (item.get("stats") or []) if s in df_cols]
                 w_raw = item.get("weights") or {}
                 weights = {k: float(v) for k, v in w_raw.items() if k in stats}
+                grp = item.get("group")
+                grp = grp if isinstance(grp, str) and grp in VALID_ARCH_GROUPS else None
+
                 if stats:
-                    # Load into THIS SESSION
                     st.session_state["custom_arches"][name] = {"stats": stats, "weights": weights}
+                    if grp:
+                        st.session_state["custom_arches"][name]["group"] = grp
                     added += 1
                     added_names.append(name)
 
             if added:
-                # Record collection
                 collection_label = label.strip() or default_label
                 st.session_state["last_arch_json_label"] = collection_label
                 st.session_state["arch_collections"].append({"label": collection_label, "names": added_names})
-                st.success(f"Loaded {added} archetype(s) into your session under label **{collection_label}**.")
+                st.success(f"Loaded {added} archetype(s) under label **{collection_label}**.")
             else:
                 st.warning("No valid archetypes found in the JSON (unknown stat names or empty entries).")
         except Exception as e:
             st.error(f"Couldn't read JSON: {e}")
+
+    if st.session_state["arch_collections"]:
+        st.markdown("**Loaded collections (this session):**")
+        col_names = [c["label"] for c in st.session_state["arch_collections"]]
+        pick = st.selectbox("Select a collection to remove (optional)", options=["—"] + col_names, index=0, key="rm_arch_collection_pick")
+        if pick != "—":
+            if st.button("Remove selected collection from this session"):
+                to_rm = next((c for c in st.session_state["arch_collections"] if c["label"] == pick), None)
+                if to_rm:
+                    for nm in to_rm["names"]:
+                        try:
+                            del st.session_state["custom_arches"][nm]
+                        except Exception:
+                            pass
+                    st.session_state["arch_collections"] = [c for c in st.session_state["arch_collections"] if c["label"] != pick]
+                    st.success(f"Removed collection **{pick}** from this session.")
+
 
     # Simple manager: list collections and optionally remove one (undo)
     if st.session_state["arch_collections"]:
@@ -1497,26 +1542,29 @@ def style_scatter_axes(ax, title_text):
     for spine in ax.spines.values():
         spine.set_color("#000")
         spine.set_linewidth(1)
-
 def snapshot_custom_archetypes(include_session: bool = True,
                                include_saved_disk: bool = True) -> dict:
     """
     Build the JSON payload for export.
     - include_session: from st.session_state["custom_arches"]
     - include_saved_disk: from ARCHETYPE_STORE file (if any)
+    Includes optional "group" for customs.
     """
     out = []
 
     if include_saved_disk:
         try:
-            disk = load_archetype_store()  # {name: {"stats":[...], "weights":{...}}}
+            disk = load_archetype_store()  # {name: {"stats":[...], "weights":{...}, "group":"DF"}}
             if isinstance(disk, dict):
                 for name, payload in disk.items():
                     stats = [s for s in (payload.get("stats") or []) if isinstance(s, str)]
                     weights = {k: float(v) for k, v in (payload.get("weights") or {}).items()
                                if isinstance(k, str)}
+                    grp = payload.get("group") if payload.get("group") in VALID_ARCH_GROUPS else None
                     if stats:
-                        out.append({"name": name, "stats": stats, "weights": weights})
+                        item = {"name": name, "stats": stats, "weights": weights}
+                        if grp: item["group"] = grp
+                        out.append(item)
         except Exception:
             pass
 
@@ -1526,14 +1574,18 @@ def snapshot_custom_archetypes(include_session: bool = True,
             for name, payload in sess.items():
                 stats = [s for s in (payload.get("stats") or []) if isinstance(s, str)]
                 weights = {k: float(v) for k, v in (payload.get("weights") or {}).items()}
+                grp = payload.get("group") if payload.get("group") in VALID_ARCH_GROUPS else None
                 if stats:
-                    out.append({"name": name, "stats": stats, "weights": weights})
+                    item = {"name": name, "stats": stats, "weights": weights}
+                    if grp: item["group"] = grp
+                    out.append(item)
 
     # Deduplicate by name, keep last (session overrides disk)
     dedup = {}
     for item in out:
         dedup[item["name"]] = item
     return {"archetypes": list(dedup.values())}
+
 
 def pizza_fig_to_array(fig, dpi=220):
     buf = BytesIO()
@@ -2065,43 +2117,78 @@ elif mode == "5":
     if player_row is None:
         st.info("Pick a player in the sidebar.")
     else:
-        archetype_catalog = get_archetype_params_full()  # includes customs
+        archetype_catalog = get_archetype_params_full()  # includes customs (session+disk) and built-ins
+        arch_groups = globals().get("ARCHETYPE_GROUPS", {})  # {name: "GK"/"DF"/"MF"/"FW"} for customs
 
-        pos_str = player_row.get('Pos','')
-        position_to_roles = {
-            "GK": ["GK"], "DF": ["CB", "FB", "WB", "LB", "RB", "LWB", "RWB", "SW"],
-            "MF": ["DM", "CM", "AM", "LM", "RM", "LW", "RW"],
-            "FW": ["ST", "CF", "WF", "Winger"]
+        # Infer player's groups from their Pos tokens
+        pos_str = player_row.get('Pos','') or ''
+        inferred_groups = set()
+        if any(k in pos_str for k in ["GK"]): inferred_groups.add("GK")
+        if any(k in pos_str for k in ["CB","FB","WB","LB","RB","LWB","RWB","SW","DF"]): inferred_groups.add("DF")
+        if any(k in pos_str for k in ["DM","CM","AM","LM","RM","LW","RW","MF"]): inferred_groups.add("MF")
+        if any(k in pos_str for k in ["ST","CF","WF","Winger","FW"]): inferred_groups.add("FW")
+
+        # UI override / refine
+        sel_groups = st.multiselect(
+            "Relevant position groups (optional)",
+            ["GK","DF","MF","FW"],
+            default=sorted(inferred_groups) if inferred_groups else []
+        )
+        group_filter = set(sel_groups) if sel_groups else (inferred_groups or {"GK","DF","MF","FW"})
+
+        # Fallback keyword match for built-ins (no explicit group)
+        keyword_fallback = {
+            "GK": ["GK"],
+            "DF": ["CB", "FB", "WB", "LB", "RB", "LWB", "RWB", "SW"],
+            "MF": ["DM", "CM", "AM", "LM", "RM", "MF", "Winger", "LW", "RW"],
+            "FW": ["ST", "CF", "WF", "FW", "Winger"]
         }
-        sel_groups = st.multiselect("Relevant position groups (optional)", ["GK","DF","MF","FW"], default=[])
-        if not sel_groups:
-            if any(k in pos_str for k in ["GK"]): sel_groups.append("GK")
-            if any(k in pos_str for k in ["CB","FB","WB","LB","RB","LWB","RWB","SW","DF"]): sel_groups.append("DF")
-            if any(k in pos_str for k in ["DM","CM","AM","LM","RM","LW","RW","MF"]): sel_groups.append("MF")
-            if any(k in pos_str for k in ["ST","CF","WF","Winger","FW"]): sel_groups.append("FW")
-            sel_groups = list(dict.fromkeys(sel_groups))
 
+        def builtin_matches_any_group(role_name: str, groups: set[str]) -> bool:
+            for g in groups:
+                kws = keyword_fallback.get(g, [])
+                if any(kw in role_name for kw in kws):
+                    return True
+            return False
+
+        # Build relevant roles:
+        #  - If a role has an explicit group (customs), require it to match group_filter
+        #  - If built-in (no group), use keyword fallback
         relevant_roles = []
-        for group in sel_groups:
-            kws = position_to_roles.get(group, [])
-            relevant_roles.extend([r for r in archetype_catalog if any(kw in r for kw in kws)])
-        relevant_roles = list(dict.fromkeys(relevant_roles)) or list(archetype_catalog.keys())
+        for role in archetype_catalog.keys():
+            grp = arch_groups.get(role)  # present for custom roles that defined a group
+            if grp:
+                if grp in group_filter:
+                    relevant_roles.append(role)
+            else:
+                if builtin_matches_any_group(role, group_filter):
+                    relevant_roles.append(role)
 
-        df_for_calc = df.copy()
+        # Fallback if nothing matched
+        if not relevant_roles:
+            relevant_roles = list(archetype_catalog.keys())
+
+        # Compute once on the pre–age pool, then show for the selected player
+        df_for_calc = st.session_state.get("df_for_calc", df.copy())
         rs_df = precompute_role_scores(df_for_calc)
 
         role_scores, role_details = [], {}
         for role in relevant_roles:
-            # try cached first
+            # cached score first
             score = None
-            if role in rs_df.columns and player_row.name in rs_df.index:
-                sc = rs_df.loc[player_row.name, role]
-                if pd.notnull(sc):
-                    score = float(sc)
+            try:
+                if role in rs_df.columns and player_row.name in rs_df.index:
+                    sc = rs_df.loc[player_row.name, role]
+                    if pd.notnull(sc):
+                        score = float(sc)
+            except Exception:
+                score = None
+
             if score is None:
                 stats_list = archetype_catalog.get(role, [])
                 score = calculate_role_score(player_row, stats_list, df_for_calc, role)
 
+            # Build detail rows (value + positional percentile)
             stats_list = archetype_catalog.get(role, [])
             detail_rows = []
             for s in stats_list:
@@ -2109,29 +2196,49 @@ elif mode == "5":
                 if pd.notnull(val):
                     pctl = position_relative_percentile(df_for_calc, player_row, s)
                     detail_rows.append((stat_display_names.get(s,s), val, pctl))
+
             role_scores.append((role, score))
             role_details[role] = detail_rows
 
         role_scores.sort(key=lambda x: x[1], reverse=True)
 
         st.subheader(_with_pos_filter(f"Role suitability — {player_row['Player']}", include_age=False))
+
+        pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
+                        "#A8D2FD","#9CBFDA","#8EC4FD","#81BCFD","#74B4FC"][::-1]
+        # fix any typo in palette length gracefully
+        pastel_blues = [c for c in pastel_blues if c.startswith("#")] or ["#CFE5FE"]*10
+        bar_colors = pastel_blues[-len(role_scores):][::-1]
+
+        def _lum(c):
+            r,g,b = [x*255 for x in mcolors.hex2color(c)]
+            return 0.299*r + 0.587*g + 0.114*b
+        bar_text_colors = ['white' if _lum(c) < 150 else '#222' for c in bar_colors]
+
         fig = go.Figure([go.Bar(
             x=[s for _, s in role_scores],
             y=[r for r, _ in role_scores],
             orientation='h',
             marker=dict(
-                color=[sample_colorscale('Blues', [0.2+0.8*i/len(role_scores)])[0] for i in range(len(role_scores))],
+                color=bar_colors,
                 line=dict(color='#333', width=1)
             ),
-            text=[f"{s:.1f}" for _, s in role_scores], textposition='inside', insidetextanchor="middle"
+            text=[f"{s:.1f}" for _, s in role_scores],
+            textposition='inside',
+            insidetextanchor='middle',
+            textfont=dict(color=bar_text_colors, size=13, family=FONT_FAMILY),
+            hovertext=[f"{r}" for r, _ in role_scores],
+            hoverinfo='text'
         )])
         fig.update_layout(
-            title=dict(text=_with_pos_filter(f"Role suitability — {player_row['Player']}", include_age=False), font=dict(color="#000", family=FONT_FAMILY)),
+            title=dict(text=_with_pos_filter(f"Role suitability — {player_row['Player']}", include_age=False),
+                       font=dict(color="#000", family=FONT_FAMILY)),
             plot_bgcolor=POSTER_BG, paper_bgcolor=POSTER_BG,
-            xaxis=dict(title="Suitability (0–100)", range=[0,100], color="#000", tickfont=dict(color="#000"), linecolor="#000"),
+            xaxis=dict(title="Suitability (0–100)", range=[0,100], gridcolor=POSTER_BG, color="#000", tickfont=dict(color="#000"), linecolor="#000"),
             yaxis=dict(autorange='reversed', color="#000", tickfont=dict(color="#000"), linecolor="#000"),
             height=min(80 + 28*len(role_scores), 1200),
             template="simple_white",
+            margin=dict(l=140, r=40, t=60, b=40),
         )
         apply_hover_style(fig)
         st.plotly_chart(fig, use_container_width=True, theme=None)
@@ -2141,6 +2248,7 @@ elif mode == "5":
         if det:
             st.write("**Stat details (player value, positional percentile):**")
             st.dataframe(pd.DataFrame(det, columns=["Stat","Value","Percentile (%)"]))
+
 
 elif mode == "6":
     # Stat Leaders
@@ -2159,29 +2267,39 @@ elif mode == "6":
 elif mode == "7":
     st.subheader("Custom Archetype")
 
-    # First: choose leagues (for leaderboard preview/filter only)
+    # Optional league filter (affects preview/leaderboards only)
     df_league = league_filter_ui(df)
 
-    # ===== 1) LOAD / MANAGE JSONs FIRST =====
+    # ---- Load / manage JSONs first (expects importer that preserves "group") ----
     import_custom_archetypes_uploader(df_cols=set(df_league.columns))
 
     st.divider()
-
-    # ===== 2) CREATE A NEW ARCHETYPE =====
     st.markdown("### Create a new archetype")
 
-    # Available numeric stats (same rule as elsewhere)
-    numeric_cols = [c for c in df_league.columns if pd.api.types.is_numeric_dtype(df_league[c]) and c not in ['Age','Mins']]
+    numeric_cols = [c for c in df_league.columns
+                    if pd.api.types.is_numeric_dtype(df_league[c]) and c not in ['Age','Mins']]
     if not numeric_cols:
         st.warning("No numeric stat columns found.")
     else:
         display_names = {c: stat_display_names.get(c, c) for c in numeric_cols}
 
-        # Name first (requested)
-        name_default = st.session_state.get("custom_arch_name", "Custom Archetype")
-        custom_name = st.text_input("Archetype name", value=name_default, key="custom_arch_name")
+        # Name + Position Group selector
+        row1 = st.columns([2, 1])
+        with row1[0]:
+            name_default = st.session_state.get("custom_arch_name", "Custom Archetype")
+            custom_name = st.text_input("Archetype name", value=name_default, key="custom_arch_name").strip()
+        with row1[1]:
+            # Use global VALID_ARCH_GROUPS if present, else fallback
+            valid_groups = set(globals().get("VALID_ARCH_GROUPS", {"GK","DF","MF","FW"}))
+            group_pick = st.selectbox(
+                "Position group",
+                ["—","GK","DF","MF","FW"],
+                index=2,
+                help="Used in 'Best Roles' to decide which players this archetype applies to."
+            )
+            group_val = group_pick if group_pick in valid_groups else None
 
-        # Then pick stats
+        # Pick up to 10 stats
         picked_labels = st.multiselect("Pick up to 10 stats", [display_names[c] for c in numeric_cols])
         stat_cols = [c for c in numeric_cols if display_names[c] in picked_labels][:10]
         if len(picked_labels) > 10:
@@ -2201,15 +2319,15 @@ elif mode == "7":
                         value=1.0, step=0.1, format="%.2f", key=f"wt_{s}"
                     )
 
-            # Save to THIS SESSION sidebar
+            # Save to session (includes group metadata)
             if st.button("➕ Add to my sidebar (this session only)", type="primary"):
-                st.session_state["custom_arches"][custom_name] = {
-                    "stats": stat_cols,
-                    "weights": weights
-                }
+                payload = {"stats": stat_cols, "weights": weights}
+                if group_val:
+                    payload["group"] = group_val
+                st.session_state["custom_arches"][custom_name] = payload
                 st.success(f"Added **{custom_name}** to your sidebar for this session.")
 
-            # ---- Export / Import ----
+            # ---- Save / Load (Export named JSON with optional disk merge) ----
             st.divider()
             st.markdown("### Save / Load your custom archetypes")
             export_custom_archetypes_named(
@@ -2220,11 +2338,9 @@ elif mode == "7":
                 show_preview=True
             )
 
-            # (Uploader with label is at the top now)
-
             st.divider()
 
-            # Build leaderboard with this custom (uses positional percentiles)
+            # ---- Leaderboard preview for this custom (positional percentiles) ----
             dfc = df_league.copy()
             dfc['CustomScore'] = [
                 calculate_custom_archetype_score(r, stat_cols, df_league, weights)
@@ -2235,14 +2351,16 @@ elif mode == "7":
             pastel_blues = ["#E8F1FE","#DCEBFE","#CFE5FE","#C2DFFE","#B5D9FE",
                             "#A8D2FD","#9BCBFD","#8EC4FD","#81BCFD","#74B4FC"][::-1]
             bar_colors = pastel_blues[-len(top):][::-1]
-            def lum(c):
+
+            def _lum(c):
                 r,g,b = [x*255 for x in mcolors.hex2color(c)]
                 return 0.299*r + 0.587*g + 0.114*b
-            bar_text_colors = ['white' if lum(c) < 150 else '#222' for c in bar_colors]
+            bar_text_colors = ['white' if _lum(c) < 150 else '#222' for c in bar_colors]
+
             labels = [
                 f"{row['Player']} • {row['CustomScore']:.2f} • "
                 f"{int(row.get('Age',np.nan)) if pd.notnull(row.get('Age',np.nan)) else '?'} • "
-                f"{row.get('Squad','?')} • {int(row.get('Mins',0)):,} mins"
+                f"{row.get('Squad','?')} • {int(pd.to_numeric(row.get('Mins',0), errors='coerce') or 0):,} mins"
                 for _, row in top.iterrows()
             ]
 
@@ -2294,6 +2412,7 @@ elif mode == "7":
                 score = calculate_custom_archetype_score(target_row, stat_cols, df_league, weights)
                 st.metric(f"{target_row['Player']} — {custom_name}", f"{score:.2f}")
                 _ = show_percentile_bar_chart(target_row, stat_cols, df_league, custom_name)
+
 
 
 elif mode == "12":
